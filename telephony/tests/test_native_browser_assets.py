@@ -73,11 +73,18 @@ class NativeBrowserAssetsTest(unittest.TestCase):
         self.assertIn('this.voiceWorker.postMessage({ type: "dtmf", callId: this.currentCall.call_id, digit });', self.main)
         self.assertIn("context.createBufferSource()", self.main)
 
-    def test_outgoing_ringback_uses_audio_asset_not_synthesized_oscillators(self):
-        self.assertIn('this.loadUiAudioBuffer("ring.mp3", context)', self.main)
-        self.assertIn("source.loop = true", self.main)
-        self.assertNotIn("createOscillator", self.main)
-        self.assertNotIn("ringbackTimer", self.main)
+    def test_ring_mp3_is_incoming_ringtone_only(self):
+        ringtone = self.main[self.main.index("\tstartRinging() {"):self.main.index("\n\tsyncDurationFromServer", self.main.index("\tstartRinging() {"))]
+        self.assertIn('this.loadUiAudioBuffer("ring.mp3", context)', ringtone)
+        self.assertIn('this.currentCall?.direction !== "incoming"', ringtone)
+        self.assertIn("source.loop = true", ringtone)
+
+    def test_outgoing_ringback_keeps_original_synthesized_call_progress_tone(self):
+        ringback = self.main[self.main.index("\tstartRingback() {"):self.main.index("\n\tstartRinging()", self.main.index("\tstartRingback() {"))]
+        self.assertIn("context.createOscillator()", ringback)
+        self.assertIn("const oscillators = [440, 480]", ringback)
+        self.assertIn("this.ringbackTimer = setInterval(pulse, 4000)", ringback)
+        self.assertNotIn("ring.mp3", ringback)
 
     def test_dial_control_sends_only_number(self):
         self.assertIn('sendJson("call.dial", { number: data.number })', self.worker)

@@ -99,11 +99,12 @@ class TelephonyVoiceSoftphone {
 		this.attendedTransfer = null;
 		this.transferredCallIds = new Set();
 		this.pendingCallSwitch = null;
-		this.ringTimer = null;
-		this.ringbackSource = null;
-		this.ringbackGain = null;
-		this.ringbackLoading = null;
-		this.ringbackGeneration = 0;
+		this.ringtoneSource = null;
+		this.ringtoneGain = null;
+		this.ringtoneLoading = null;
+		this.ringtoneGeneration = 0;
+		this.ringbackTimer = null;
+		this.ringbackNodes = new Set();
 		this.keypadToneSource = null;
 		this.keypadToneGain = null;
 		this.uiAudioBuffers = new Map();
@@ -4555,65 +4556,90 @@ class TelephonyVoiceSoftphone {
 	}
 
 	startRingback() {
-		if (this.ringbackSource || this.ringbackLoading) return;
+		if (this.ringbackTimer) return;
+		const pulse = () => {
+			const context = this.preparedAudioContext;
+			if (!context || context.state === "closed" || this.currentCall?.direction !== "outgoing" || this.currentCall?.state !== "ringing") return;
+			const gain = context.createGain();
+			gain.gain.value = 0.035;
+			gain.connect(context.destination);
+			const oscillators = [440, 480].map((frequency) => {
+				const oscillator = context.createOscillator();
+				oscillator.frequency.value = frequency;
+				oscillator.connect(gain);
+				oscillator.start();
+				this.ringbackNodes.add(oscillator);
+				return oscillator;
+			});
+			setTimeout(() => {
+				for (const oscillator of oscillators) {
+					try { oscillator.stop(); oscillator.disconnect(); } catch (_) {}
+					this.ringbackNodes.delete(oscillator);
+				}
+				try { gain.disconnect(); } catch (_) {}
+			}, 900);
+		};
+		pulse();
+		this.ringbackTimer = setInterval(pulse, 4000);
+	}
+
+	stopRingback() {
+		if (this.ringbackTimer) clearInterval(this.ringbackTimer);
+		this.ringbackTimer = null;
+		for (const oscillator of this.ringbackNodes) {
+			try { oscillator.stop(); oscillator.disconnect(); } catch (_) {}
+		}
+		this.ringbackNodes.clear();
+	}
+
+	startRinging() {
+		this.stopRinging();
 		const callId = this.currentCall?.call_id;
-		if (!callId || this.currentCall?.direction !== "outgoing" || this.currentCall?.state !== "ringing") return;
-		const generation = ++this.ringbackGeneration;
-		const pending = this.startRingbackAudio(callId, generation);
-		this.ringbackLoading = pending;
+		if (!callId || this.currentCall?.direction !== "incoming" || this.currentCall?.state !== "ringing") return;
+		const generation = ++this.ringtoneGeneration;
+		const pending = this.startRingtoneAudio(callId, generation);
+		this.ringtoneLoading = pending;
 		void pending.finally(() => {
-			if (this.ringbackLoading === pending) this.ringbackLoading = null;
+			if (this.ringtoneLoading === pending) this.ringtoneLoading = null;
 		});
 	}
 
-	async startRingbackAudio(callId, generation) {
+	async startRingtoneAudio(callId, generation) {
 		const context = this.audioContext || await this.primeAudio({ requireRunning: false });
 		if (!context || context.state === "closed") return;
 		let buffer;
 		try { buffer = await this.loadUiAudioBuffer("ring.mp3", context); } catch (_) { return; }
 		if (
-			generation !== this.ringbackGeneration || this.currentCall?.call_id !== callId
-			|| this.currentCall?.direction !== "outgoing" || this.currentCall?.state !== "ringing"
-			|| this.ringbackSource
+			generation !== this.ringtoneGeneration || this.currentCall?.call_id !== callId
+			|| this.currentCall?.direction !== "incoming" || this.currentCall?.state !== "ringing"
+			|| this.ringtoneSource
 		) return;
 		if (context.state !== "running") {
 			try { await this.resumeAudioContext(context, 150); } catch (_) { return; }
 		}
-		if (generation !== this.ringbackGeneration || this.currentCall?.state !== "ringing") return;
+		if (generation !== this.ringtoneGeneration || this.currentCall?.state !== "ringing") return;
 		const source = context.createBufferSource();
 		const gain = context.createGain();
-		gain.gain.value = 0.16;
+		gain.gain.value = 0.28;
 		source.buffer = buffer;
 		source.loop = true;
 		source.connect(gain);
 		gain.connect(context.destination);
-		this.ringbackSource = source;
-		this.ringbackGain = gain;
+		this.ringtoneSource = source;
+		this.ringtoneGain = gain;
 		source.start();
 	}
 
-	stopRingback() {
-		this.ringbackGeneration += 1;
-		this.ringbackLoading = null;
-		const source = this.ringbackSource;
-		const gain = this.ringbackGain;
-		this.ringbackSource = null;
-		this.ringbackGain = null;
+	stopRinging() {
+		this.ringtoneGeneration += 1;
+		this.ringtoneLoading = null;
+		const source = this.ringtoneSource;
+		const gain = this.ringtoneGain;
+		this.ringtoneSource = null;
+		this.ringtoneGain = null;
 		try { source?.stop(); } catch (_) {}
 		try { source?.disconnect(); } catch (_) {}
 		try { gain?.disconnect(); } catch (_) {}
-	}
-
-	startRinging() {
-		this.stopRinging();
-		const sound = () => { try { frappe.utils?.play_sound?.("alert"); } catch (_) {} };
-		sound();
-		this.ringTimer = setInterval(sound, 1800);
-	}
-
-	stopRinging() {
-		if (this.ringTimer) clearInterval(this.ringTimer);
-		this.ringTimer = null;
 		this.$toggle?.removeClass("ringing");
 	}
 
