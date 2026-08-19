@@ -99,10 +99,10 @@ class TelephonyVoiceSoftphone {
 		this.attendedTransfer = null;
 		this.transferredCallIds = new Set();
 		this.pendingCallSwitch = null;
-		this.ringtoneSource = null;
-		this.ringtoneGain = null;
-		this.ringtoneLoading = null;
-		this.ringtoneGeneration = 0;
+		this.ringtoneAudio = null;
+		this.ringtoneFallbackTimer = null;
+		this.ringtoneUnlockHandler = null;
+		this.ringtoneArmed = false;
 		this.ringbackTimer = null;
 		this.ringbackNodes = new Set();
 		this.keypadToneSource = null;
@@ -595,6 +595,7 @@ class TelephonyVoiceSoftphone {
 			this.renderQuality();
 			if (this.view === "settings") this.renderDiagnostics();
 		}, 500);
+		this.prepareRingtoneAudio();
 		void this.refreshDevices();
 		void this.runPreflight();
 		this.renderCallNotificationStatus();
@@ -3456,6 +3457,7 @@ class TelephonyVoiceSoftphone {
 		if (this.preferredSpeakerId) localStorage.setItem(TELEPHONY_SPEAKER_STORAGE_KEY, this.preferredSpeakerId);
 		else localStorage.removeItem(TELEPHONY_SPEAKER_STORAGE_KEY);
 		await this.applySpeakerSelection();
+		await this.applyRingtoneSpeakerSelection();
 	}
 
 	async changeAudioProcessing(enabled) {
@@ -4592,54 +4594,106 @@ class TelephonyVoiceSoftphone {
 		this.ringbackNodes.clear();
 	}
 
-	startRinging() {
-		this.stopRinging();
-		const callId = this.currentCall?.call_id;
-		if (!callId || this.currentCall?.direction !== "incoming" || this.currentCall?.state !== "ringing") return;
-		const generation = ++this.ringtoneGeneration;
-		const pending = this.startRingtoneAudio(callId, generation);
-		this.ringtoneLoading = pending;
-		void pending.finally(() => {
-			if (this.ringtoneLoading === pending) this.ringtoneLoading = null;
-		});
+	prepareRingtoneAudio() {
+		if (this.ringtoneAudio || typeof Audio === "undefined") return this.ringtoneAudio;
+		const audio = new Audio(this.uiAudioAsset("ring.mp3"));
+		audio.preload = "auto";
+		audio.loop = true;
+		audio.playsInline = true;
+		audio.volume = 0.72;
+		try { audio.load(); } catch (_) {}
+		this.ringtoneAudio = audio;
+		void this.applyRingtoneSpeakerSelection();
+
+		this.ringtoneUnlockHandler = () => void this.armRingtoneAudio();
+		for (const eventName of ["pointerdown", "keydown", "touchstart"]) {
+			document.addEventListener(eventName, this.ringtoneUnlockHandler, { capture: true, passive: true });
+		}
+		return audio;
 	}
 
-	async startRingtoneAudio(callId, generation) {
-		const context = this.audioContext || await this.primeAudio({ requireRunning: false });
-		if (!context || context.state === "closed") return;
-		let buffer;
-		try { buffer = await this.loadUiAudioBuffer("ring.mp3", context); } catch (_) { return; }
-		if (
-			generation !== this.ringtoneGeneration || this.currentCall?.call_id !== callId
-			|| this.currentCall?.direction !== "incoming" || this.currentCall?.state !== "ringing"
-			|| this.ringtoneSource
-		) return;
-		if (context.state !== "running") {
-			try { await this.resumeAudioContext(context, 150); } catch (_) { return; }
+	removeRingtoneUnlockListeners() {
+		if (!this.ringtoneUnlockHandler) return;
+		for (const eventName of ["pointerdown", "keydown", "touchstart"]) {
+			document.removeEventListener(eventName, this.ringtoneUnlockHandler, true);
 		}
-		if (generation !== this.ringtoneGeneration || this.currentCall?.state !== "ringing") return;
-		const source = context.createBufferSource();
-		const gain = context.createGain();
-		gain.gain.value = 0.28;
-		source.buffer = buffer;
-		source.loop = true;
-		source.connect(gain);
-		gain.connect(context.destination);
-		this.ringtoneSource = source;
-		this.ringtoneGain = gain;
-		source.start();
+		this.ringtoneUnlockHandler = null;
+	}
+
+	async armRingtoneAudio() {
+		const audio = this.prepareRingtoneAudio();
+		if (!audio || this.ringtoneArmed) return;
+		const volume = audio.volume;
+		try {
+			audio.volume = 0;
+			await audio.play();
+			audio.pause();
+			audio.currentTime = 0;
+			this.ringtoneArmed = true;
+			this.removeRingtoneUnlockListeners();
+		} catch (_) {
+			return;
+		} finally {
+			audio.volume = volume;
+		}
+		if (this.currentCall?.direction === "incoming" && this.currentCall?.state === "ringing") {
+			void this.playIncomingRingtone();
+		}
+	}
+
+	async applyRingtoneSpeakerSelection() {
+		const audio = this.ringtoneAudio;
+		if (!audio || typeof audio.setSinkId !== "function") return false;
+		try {
+			await audio.setSinkId(this.preferredSpeakerId || "");
+			return true;
+		} catch (_) {
+			return false;
+		}
+	}
+
+	startFallbackRingtone() {
+		if (this.ringtoneFallbackTimer) return;
+		const sound = () => {
+			if (this.currentCall?.direction !== "incoming" || this.currentCall?.state !== "ringing") return;
+			try { frappe.utils?.play_sound?.("alert"); } catch (_) {}
+		};
+		sound();
+		this.ringtoneFallbackTimer = setInterval(sound, 1800);
+	}
+
+	async playIncomingRingtone() {
+		const callId = this.currentCall?.call_id;
+		if (!callId || this.currentCall?.direction !== "incoming" || this.currentCall?.state !== "ringing") return;
+		if (frappe.boot?.user?.mute_sounds) return;
+		const audio = this.prepareRingtoneAudio();
+		if (!audio) { this.startFallbackRingtone(); return; }
+		await this.applyRingtoneSpeakerSelection();
+		if (this.currentCall?.call_id !== callId || this.currentCall?.state !== "ringing") return;
+		try {
+			audio.currentTime = 0;
+			audio.volume = 0.72;
+			await audio.play();
+			if (this.ringtoneFallbackTimer) clearInterval(this.ringtoneFallbackTimer);
+			this.ringtoneFallbackTimer = null;
+		} catch (_) {
+			this.startFallbackRingtone();
+		}
+	}
+
+	startRinging() {
+		this.stopRinging();
+		if (!this.currentCall?.call_id || this.currentCall?.direction !== "incoming" || this.currentCall?.state !== "ringing") return;
+		this.prepareRingtoneAudio();
+		void this.playIncomingRingtone();
 	}
 
 	stopRinging() {
-		this.ringtoneGeneration += 1;
-		this.ringtoneLoading = null;
-		const source = this.ringtoneSource;
-		const gain = this.ringtoneGain;
-		this.ringtoneSource = null;
-		this.ringtoneGain = null;
-		try { source?.stop(); } catch (_) {}
-		try { source?.disconnect(); } catch (_) {}
-		try { gain?.disconnect(); } catch (_) {}
+		if (this.ringtoneFallbackTimer) clearInterval(this.ringtoneFallbackTimer);
+		this.ringtoneFallbackTimer = null;
+		const audio = this.ringtoneAudio;
+		try { audio?.pause(); } catch (_) {}
+		try { if (audio) audio.currentTime = 0; } catch (_) {}
 		this.$toggle?.removeClass("ringing");
 	}
 
