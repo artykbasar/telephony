@@ -20,6 +20,14 @@ class SipCallState(str, Enum):
     ENDED = "ended"
 
 
+class SipCallOutcome(str, Enum):
+    COMPLETED = "Completed"
+    FAILED = "Failed"
+    BUSY = "Busy"
+    NO_ANSWER = "No Answer"
+    CANCELED = "Canceled"
+
+
 class SipCallDirection(str, Enum):
     INCOMING = "incoming"
     OUTGOING = "outgoing"

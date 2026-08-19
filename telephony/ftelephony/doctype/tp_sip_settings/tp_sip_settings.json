@@ -17,25 +17,12 @@
   "tls_server_name",
   "proxy",
   "proxy_port",
-  "pbx_type",
-  "ice_transport_policy",
   "wss_uri",
-  "realm",
-  "section_break_reliability",
-  "enable_incall_recovery",
-  "enable_full_preflight",
-  "preflight_test_target",
-  "section_break_net",
-  "stun_servers",
-  "column_break_net",
-  "turn_servers",
   "local_https_section",
   "enable_local_https",
   "local_https_host",
   "local_https_port",
-  "local_https_status_html",
-  "section_break_sec",
-  "webhook_secret"
+  "local_https_status_html"
  ],
  "fields": [
   {
@@ -50,96 +37,11 @@
    "label": "Enabled"
   },
   {
-   "default": "Generic",
-   "fieldname": "pbx_type",
-   "fieldtype": "Select",
-   "in_list_view": 1,
-   "label": "PBX Type",
-   "options": "Generic\nAsterisk\nFreeSWITCH\nKamailio + RTPengine\nOpenSIPS + RTPengine",
-   "hidden": 1
-  },
-  {
-   "default": "",
-   "depends_on": "enabled",
-   "description": "Leave empty for default browser behavior (all candidates). Use relay only as a fallback for difficult NATs.",
-   "fieldname": "ice_transport_policy",
-   "fieldtype": "Select",
-   "label": "ICE Transport Policy",
-   "options": "\nall\nrelay",
-   "hidden": 1
-  },
-  {
    "depends_on": "enabled",
    "description": "Legacy WebRTC SIP field retained only for compatibility with older records. Native Telephony does not require or use a browser WSS URI.",
    "fieldname": "wss_uri",
    "fieldtype": "Data",
    "label": "WSS URI",
-   "hidden": 1
-  },
-  {
-   "depends_on": "enabled",
-   "fieldname": "realm",
-   "fieldtype": "Data",
-   "label": "Realm / Domain",
-   "hidden": 1
-  },
-  {
-   "fieldname": "section_break_reliability",
-   "fieldtype": "Section Break",
-   "label": "Reliability",
-   "hidden": 1
-  },
-  {
-   "default": "1",
-   "depends_on": "enabled",
-   "description": "Best-effort recovery when ICE connects but DTLS/media stalls (no hard dependencies on PBX type).",
-   "fieldname": "enable_incall_recovery",
-   "fieldtype": "Check",
-   "label": "Enable In-Call Recovery",
-   "hidden": 1
-  },
-  {
-   "default": "0",
-   "depends_on": "enabled",
-   "description": "Optional short media test call to a configurable target (may require mic permission).",
-   "fieldname": "enable_full_preflight",
-   "fieldtype": "Check",
-   "label": "Enable Full Preflight Call",
-   "hidden": 1
-  },
-  {
-   "depends_on": "enable_full_preflight",
-   "description": "Extension or SIP URI to call during the full preflight test (e.g. 1000 or sip:echo@example.com).",
-   "fieldname": "preflight_test_target",
-   "fieldtype": "Data",
-   "label": "Preflight Test Target",
-   "hidden": 1
-  },
-  {
-   "fieldname": "section_break_net",
-   "fieldtype": "Section Break",
-   "label": "Network",
-   "hidden": 1
-  },
-  {
-   "depends_on": "enabled",
-   "description": "One per line, e.g. stun:stun.l.google.com:19302",
-   "fieldname": "stun_servers",
-   "fieldtype": "Small Text",
-   "label": "STUN Servers",
-   "hidden": 1
-  },
-  {
-   "fieldname": "column_break_net",
-   "fieldtype": "Column Break",
-   "hidden": 1
-  },
-  {
-   "depends_on": "enabled",
-   "description": "One per line, e.g. turn:turn.example.com:5349?transport=tcp|user|pass",
-   "fieldname": "turn_servers",
-   "fieldtype": "Small Text",
-   "label": "TURN Servers",
    "hidden": 1
   },
   {
@@ -174,17 +76,6 @@
    "fieldname": "local_https_status_html",
    "fieldtype": "HTML",
    "label": "Local HTTPS Status"
-  },
-  {
-   "fieldname": "section_break_sec",
-   "fieldtype": "Section Break",
-   "label": "Security"
-  },
-  {
-   "depends_on": "enabled",
-   "fieldname": "webhook_secret",
-   "fieldtype": "Password",
-   "label": "Webhook Secret"
   },
   {
    "fieldname": "sip_server",

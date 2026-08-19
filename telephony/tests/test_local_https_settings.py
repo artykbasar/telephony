@@ -31,6 +31,13 @@ class LocalHttpsSettingsTest(unittest.TestCase):
         self.assertEqual(fields["local_https_port"].get("default"), "8443")
         self.assertNotIn("mandatory_depends_on", fields["wss_uri"])
         self.assertTrue(fields["wss_uri"].get("hidden"))
+        self.assertIn("wss_uri", fields)
+        for legacy_dead in (
+            "pbx_type", "ice_transport_policy", "realm", "enable_incall_recovery",
+            "enable_full_preflight", "preflight_test_target", "stun_servers",
+            "turn_servers", "webhook_secret",
+        ):
+            self.assertNotIn(legacy_dead, fields)
 
     def test_form_script_polls_status_and_opens_testing_site(self):
         script = (SETTINGS / "tp_sip_settings.js").read_text()

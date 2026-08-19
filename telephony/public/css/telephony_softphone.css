@@ -312,12 +312,6 @@
 #telephony-sip-softphone .tp-softphone-swap-icon {
   background-image: url("/assets/telephony/softphone_media/swap_calls.svg");
 }
-#telephony-sip-softphone .tp-softphone-attended-icon {
-  background-image: url("/assets/telephony/softphone_media/attended_transfer_off.svg");
-}
-#telephony-sip-softphone.tp-softphone-attended .tp-softphone-attended-icon {
-  background-image: url("/assets/telephony/softphone_media/attended_transfer_on.svg");
-}
 #telephony-sip-softphone .tp-softphone-dialpad-icon {
   width: 44px;
   height: 44px;

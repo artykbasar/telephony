@@ -7,6 +7,7 @@ from telephony.voice.sip.models import (
     CallStateCallback,
     IncomingCallCallback,
     SipAccountConfig,
+    SipCallOutcome,
     SipCallState,
     SipRegistrationState,
     SipTransferResult,
@@ -132,6 +133,10 @@ class SipEngine(ABC):
     def signaling_status(self) -> dict[str, object]:
         """Return safe live SIP transport diagnostics when supported by the engine."""
         return {}
+
+    def terminal_outcome(self, call_id: str) -> SipCallOutcome | None:
+        """Return the best known terminal call outcome for an ended call."""
+        return None
 
     @abstractmethod
     def write_audio(self, call_id: str, data: bytes) -> None:

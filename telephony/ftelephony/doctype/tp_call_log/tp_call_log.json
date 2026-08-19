@@ -8,7 +8,7 @@
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
-  "field_order": [
+ "field_order": [
   "telephony_medium",
   "section_break_gyqe",
   "id",
@@ -21,6 +21,7 @@
   "duration",
   "medium",
   "start_time",
+  "connected_at",
   "column_break_ufnp",
   "to",
   "type",
@@ -33,11 +34,11 @@
  ],
  "fields": [
   {
-  "fieldname": "telephony_medium",
-  "fieldtype": "Select",
-  "in_list_view": 1,
-  "in_standard_filter": 1,
-  "label": "Telephony Medium",
+   "fieldname": "telephony_medium",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Telephony Medium",
    "options": "\nManual\nTwilio\nExotel\nSIP",
    "read_only": 1
   },
@@ -107,6 +108,12 @@
    "fieldname": "start_time",
    "fieldtype": "Datetime",
    "label": "Start Time"
+  },
+  {
+   "fieldname": "connected_at",
+   "fieldtype": "Datetime",
+   "label": "Connected At",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_ufnp",

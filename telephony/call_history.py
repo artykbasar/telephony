@@ -32,6 +32,12 @@ def _decode_cursor(cursor: str | None):
         frappe.throw(_("Invalid call history cursor."), frappe.ValidationError)
 
 
+def _total_duration_seconds(start_time, end_time, fallback=0) -> int:
+    if start_time and end_time:
+        return max(0, int((get_datetime(end_time) - get_datetime(start_time)).total_seconds()))
+    return int(fallback or 0)
+
+
 def _require_sip_agent(user: str) -> None:
     if user == "Guest" or not frappe.db.exists("TP Telephony Agent", {"user": user, "sip_enabled": 1}):
         frappe.throw(_("You do not have permission to view Telephony SIP call history."), frappe.PermissionError)
@@ -61,7 +67,7 @@ def get_my_call_history(cursor: str | None = None, history_filter: str | None = 
 
     rows = frappe.get_list(
         "TP Call Log",
-        fields=["name", "id", "type", "status", "from", "to", "caller_name", "ivr_route", "caller", "receiver", "start_time", "end_time", "duration", "recording_url", "creation"],
+        fields=["name", "id", "type", "status", "from", "to", "caller_name", "ivr_route", "caller", "receiver", "start_time", "connected_at", "end_time", "duration", "recording_url", "creation"],
         filters=filters,
         or_filters=or_filters,
         order_by="start_time desc, name desc",
@@ -97,10 +103,10 @@ def get_my_call_history(cursor: str | None = None, history_filter: str | None = 
             "contact_image": contact.get("image"),
             "answered_by": row.receiver if direction == "Incoming" else row.caller,
             "started_at": row.start_time,
-            "connected_at": row.start_time if row.status in {"In Progress", "Completed"} else None,
+            "connected_at": row.connected_at,
             "ended_at": row.end_time,
             "duration_seconds": row.duration or 0,
-            "total_duration_seconds": row.duration or 0,
+            "total_duration_seconds": _total_duration_seconds(row.start_time, row.end_time, row.duration),
             "recording": row.recording_url,
             "creation": row.creation,
         })

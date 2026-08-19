@@ -11,7 +11,8 @@ class NativeBrowserAssetsTest(unittest.TestCase):
         cls.worker = (ROOT / "public/js/telephony_voice_transport_worker.bundle.js").read_text()
         cls.push_worker = (ROOT / "public/js/telephony_push_worker.bundle.js").read_text()
         cls.realtime_handler = (ROOT.parent / "realtime/handlers.js").read_text()
-        cls.push_avatar = ROOT / "public/softphone_media/contact_avatar.png"
+        cls.media_dir = ROOT / "public/softphone_media"
+        cls.push_avatar = cls.media_dir / "contact_avatar.png"
 
     def test_browser_uses_socketio_as_only_voice_transport(self):
         self.assertIn('import { io } from "socket.io-client"', self.worker)
@@ -52,6 +53,16 @@ class NativeBrowserAssetsTest(unittest.TestCase):
             "public/js/vendor/adapter.js",
         ):
             self.assertFalse((ROOT / relative).exists(), relative)
+
+    def test_obsolete_webrtc_media_assets_are_not_shipped(self):
+        for name in (
+            "0.wav", "1.wav", "2.wav", "3.wav", "4.wav", "5.wav", "6.wav",
+            "7.wav", "8.wav", "9.wav", "hash.wav", "star.wav", "silence.wav",
+            "ring.mp3", "arrow-repeat.svg", "contact_avatar.svg", "resume_audio.svg",
+            "transfer_back.svg",
+        ):
+            self.assertFalse((self.media_dir / name).exists(), name)
+        self.assertTrue(self.push_avatar.exists())
 
     def test_dial_control_sends_only_number(self):
         self.assertIn('sendJson("call.dial", { number: data.number })', self.worker)

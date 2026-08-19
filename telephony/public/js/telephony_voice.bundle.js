@@ -166,9 +166,6 @@ class TelephonyVoiceSoftphone {
 
 	mount() {
 		if (document.getElementById("telephony-sip-softphone")) return;
-		if (!document.querySelector('link[href*="/assets/telephony/css/telephony_softphone.css"]')) {
-			$("<link>", { rel: "stylesheet", href: "/assets/telephony/css/telephony_softphone.css" }).appendTo(document.head);
-		}
 		const keypadLetters = { 2: "ABC", 3: "DEF", 4: "GHI", 5: "JKL", 6: "MNO", 7: "PQRS", 8: "TUV", 9: "WXYZ", 0: "+" };
 		const keypadHtml = ["1","2","3","4","5","6","7","8","9","*","0","#"]
 			.map((digit) => `<button type="button" data-digit="${digit}"><span class="tp-softphone-keypad-digit">${digit}</span><span class="tp-softphone-keypad-letters">${keypadLetters[digit] || ""}</span></button>`)

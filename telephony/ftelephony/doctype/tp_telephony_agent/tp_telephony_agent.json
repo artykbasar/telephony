@@ -30,11 +30,6 @@
   "sip_override_proxy",
   "sip_override_proxy_port",
   "sip_server",
-  "sip_realm",
-  "section_break_stun",
-  "use_global_stun_turn",
-  "sip_stun_servers",
-  "sip_turn_servers",
   "section_break_riia",
   "twilio",
   "twilio_number",
@@ -96,13 +91,6 @@
    "fieldname": "sip_server",
    "fieldtype": "Data",
    "label": "SIP Server (WSS URI)",
-   "hidden": 1
-  },
-  {
-   "depends_on": "sip_enabled",
-   "fieldname": "sip_realm",
-   "fieldtype": "Data",
-   "label": "Realm / Domain",
    "hidden": 1
   },
   {
@@ -208,35 +196,6 @@
    "fieldtype": "Int",
    "label": "Proxy Port",
    "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings && doc.sip_override_proxy"
-  },
-  {
-   "fieldname": "section_break_stun",
-   "fieldtype": "Section Break",
-   "label": "STUN / TURN",
-   "hidden": 1
-  },
-  {
-   "default": "1",
-   "fieldname": "use_global_stun_turn",
-   "fieldtype": "Check",
-   "label": "Use Global STUN/TURN",
-   "hidden": 1
-  },
-  {
-   "depends_on": "eval:doc.sip_enabled && !doc.use_global_stun_turn",
-   "description": "One per line, e.g. stun:stun.l.google.com:19302",
-   "fieldname": "sip_stun_servers",
-   "fieldtype": "Small Text",
-   "label": "STUN Servers",
-   "hidden": 1
-  },
-  {
-   "depends_on": "eval:doc.sip_enabled && !doc.use_global_stun_turn",
-   "description": "One per line, e.g. turn:turn.example.com:5349?transport=tcp|user|pass",
-   "fieldname": "sip_turn_servers",
-   "fieldtype": "Small Text",
-   "label": "TURN Servers",
-   "hidden": 1
   },
   {
    "fieldname": "section_break_riia",

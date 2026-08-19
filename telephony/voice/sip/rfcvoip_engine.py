@@ -23,6 +23,7 @@ from telephony.voice.sip.models import (
     IncomingCallCallback,
     SipAccountConfig,
     SipCallDirection,
+    SipCallOutcome,
     SipCallState,
     SipIncomingCall,
     SipRegistrationState,
@@ -86,6 +87,7 @@ class _RfcVoipPhone(VoIPPhone):
         kwargs.pop("rtpPortLow", None)
         kwargs.pop("rtpPortHigh", None)
         self._telephony_rtp_owner = id(self)
+        self._telephony_final_invite_status: dict[str, int] = {}
         super().__init__(*args, **kwargs)
         # RFCVoIP 2.10.2 derives Call-ID from a process-local counter that
         # restarts at zero. That can collide with persisted Telephony calls after
@@ -95,6 +97,23 @@ class _RfcVoipPhone(VoIPPhone):
 
     def _gen_unique_call_id(self) -> str:
         return f"{uuid.uuid4().hex}@{self.sip.myIP}:{self.sip.myPort}"
+
+    def callback(self, request) -> None:
+        cseq = getattr(request, "headers", {}).get("CSeq", {})
+        method = cseq.get("method") if isinstance(cseq, dict) else None
+        try:
+            status_code = int(getattr(request, "status", 0) or 0)
+        except (TypeError, ValueError):
+            status_code = 0
+        call_id = str(getattr(request, "headers", {}).get("Call-ID", "") or "")
+        if method == "INVITE" and status_code >= 200 and call_id:
+            with self._call_state_lock:
+                self._telephony_final_invite_status[call_id] = status_code
+        super().callback(request)
+
+    def final_invite_status(self, call_id: str) -> int | None:
+        with self._call_state_lock:
+            return self._telephony_final_invite_status.get(str(call_id))
 
     def request_ports(self, count: int, blocking=True) -> list[int]:
         del blocking
@@ -184,6 +203,7 @@ class RfcVoipEngine(SipEngine):
         self._calls: dict[str, _TrackedCall] = {}
         self._final_states: dict[str, SipCallState] = {}
         self._last_states: dict[str, SipCallState] = {}
+        self._terminal_outcomes: dict[str, SipCallOutcome] = {}
 
         self._incoming_call_callback: IncomingCallCallback | None = None
         self._call_state_callback: CallStateCallback | None = None
@@ -298,6 +318,9 @@ class RfcVoipEngine(SipEngine):
                     self._phone = None
                     self._account = None
                     self._calls.clear()
+                    self._final_states.clear()
+                    self._last_states.clear()
+                    self._terminal_outcomes.clear()
                     self._rfc_threads.clear()
 
         if shutdown_error is not None:
@@ -380,6 +403,8 @@ class RfcVoipEngine(SipEngine):
 
     def reject_call(self, call_id: str) -> None:
         tracked = self._require_call(call_id)
+        with self._lock:
+            self._terminal_outcomes[call_id] = SipCallOutcome.CANCELED
         tracked.call.deny()
         self._publish_call_state(call_id, self._map_call_state(tracked.call.state))
 
@@ -388,8 +413,12 @@ class RfcVoipEngine(SipEngine):
         state = tracked.call.state
 
         if state == CallState.ANSWERED:
+            with self._lock:
+                self._terminal_outcomes[call_id] = SipCallOutcome.COMPLETED
             tracked.call.hangup()
         elif state in (CallState.DIALING, CallState.RINGING):
+            with self._lock:
+                self._terminal_outcomes[call_id] = SipCallOutcome.CANCELED
             if tracked.direction == SipCallDirection.INCOMING and state == CallState.RINGING:
                 tracked.call.deny()
             else:
@@ -516,6 +545,10 @@ class RfcVoipEngine(SipEngine):
             return final_state
         raise SipCallNotFoundError(f"Unknown SIP call: {call_id}")
 
+    def terminal_outcome(self, call_id: str) -> SipCallOutcome | None:
+        with self._lock:
+            return self._terminal_outcomes.get(call_id)
+
     def on_incoming_call(self, callback: IncomingCallCallback | None) -> None:
         with self._lock:
             self._incoming_call_callback = callback
@@ -551,6 +584,8 @@ class RfcVoipEngine(SipEngine):
         with self._lock:
             self._calls[call_id] = _TrackedCall(call=call, direction=direction)
             self._final_states.pop(call_id, None)
+            self._last_states.pop(call_id, None)
+            self._terminal_outcomes.pop(call_id, None)
 
     def _handle_incoming_call(self, call: VoIPCall) -> None:
         call_id = str(call.call_id)
@@ -592,13 +627,40 @@ class RfcVoipEngine(SipEngine):
 
     def _publish_call_state(self, call_id: str, state: SipCallState) -> None:
         with self._lock:
-            if self._last_states.get(call_id) == state:
+            previous = self._last_states.get(call_id)
+            if previous == state:
                 return
+            if state == SipCallState.ENDED and call_id not in self._terminal_outcomes:
+                self._terminal_outcomes[call_id] = self._infer_terminal_outcome_locked(call_id, previous)
             self._last_states[call_id] = state
             callback = self._call_state_callback
 
         if callback is not None:
             self._invoke_callback(callback, call_id, state)
+
+    def _infer_terminal_outcome_locked(
+        self, call_id: str, previous: SipCallState | None
+    ) -> SipCallOutcome:
+        if previous == SipCallState.CONNECTED:
+            return SipCallOutcome.COMPLETED
+
+        tracked = self._calls.get(call_id)
+        if tracked is not None and tracked.direction == SipCallDirection.INCOMING:
+            return SipCallOutcome.NO_ANSWER
+
+        phone = self._phone
+        status_code = phone.final_invite_status(call_id) if isinstance(phone, _RfcVoipPhone) else None
+        if status_code in {486, 600}:
+            return SipCallOutcome.BUSY
+        if status_code in {408, 480}:
+            return SipCallOutcome.NO_ANSWER
+        if status_code in {487, 603}:
+            return SipCallOutcome.CANCELED
+        if status_code is not None:
+            return SipCallOutcome.FAILED
+        if previous == SipCallState.RINGING:
+            return SipCallOutcome.NO_ANSWER
+        return SipCallOutcome.FAILED
 
     def _capture_rfc_threads(self, before_threads: set[threading.Thread]) -> None:
         deadline = time.monotonic() + 0.1

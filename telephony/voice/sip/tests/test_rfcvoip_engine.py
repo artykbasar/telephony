@@ -11,6 +11,8 @@ from rfcvoip.VoIP import CallState, PhoneStatus, VoIPPhone
 
 from telephony.voice.sip import (
     SipAccountConfig,
+    SipCallDirection,
+    SipCallOutcome,
     SipCallState,
     SipEngineStateError,
     SipRegistrationState,
@@ -82,6 +84,7 @@ class _FakePhone:
         self.sip = _FakeSip()
         self.threads = []
         self.calls = {}
+        self.final_statuses = {}
         self._receive_stop = threading.Event()
         self._receive_thread = None
         self.__class__.instances.append(self)
@@ -107,6 +110,9 @@ class _FakePhone:
         call = _FakeCall(f"out-{number}")
         self.calls[call.call_id] = call
         return call
+
+    def final_invite_status(self, call_id):
+        return self.final_statuses.get(call_id)
 
 
 class RfcVoipEngineTest(unittest.TestCase):
@@ -224,6 +230,33 @@ class RfcVoipEngineTest(unittest.TestCase):
         self.engine.hangup_call(call_id)
         self.assertTrue(call.hung_up)
         self.assertEqual(self.engine.get_call_state(call_id), SipCallState.ENDED)
+        self.assertEqual(self.engine.terminal_outcome(call_id), SipCallOutcome.COMPLETED)
+
+
+    def test_terminal_outcomes_cover_busy_cancel_and_missed_incoming(self):
+        phone = self.register()
+
+        busy_id = self.engine.make_call("8300")
+        busy_call = phone.calls[busy_id]
+        busy_call.state = CallState.RINGING
+        self.engine._publish_call_state(busy_id, SipCallState.RINGING)
+        phone.final_statuses[busy_id] = 486
+        busy_call.state = CallState.ENDED
+        self.wait_for(lambda: self.engine.terminal_outcome(busy_id) is not None)
+        self.assertEqual(self.engine.get_call_state(busy_id), SipCallState.ENDED)
+        self.assertEqual(self.engine.terminal_outcome(busy_id), SipCallOutcome.BUSY)
+
+        canceled_id = self.engine.make_call("8301")
+        self.engine.hangup_call(canceled_id)
+        self.assertEqual(self.engine.terminal_outcome(canceled_id), SipCallOutcome.CANCELED)
+
+        incoming = _FakeCall("incoming-missed", state=CallState.RINGING)
+        self.engine._track_call("incoming-missed", incoming, SipCallDirection.INCOMING)
+        self.engine._publish_call_state("incoming-missed", SipCallState.RINGING)
+        incoming.state = CallState.ENDED
+        self.wait_for(lambda: self.engine.terminal_outcome("incoming-missed") is not None)
+        self.assertEqual(self.engine.get_call_state("incoming-missed"), SipCallState.ENDED)
+        self.assertEqual(self.engine.terminal_outcome("incoming-missed"), SipCallOutcome.NO_ANSWER)
 
     def test_hold_and_transfer_delegate_to_dialog_controller(self):
         phone = self.register()

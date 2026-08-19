@@ -8,6 +8,7 @@ from telephony.voice.sip.engine import (
 from telephony.voice.sip.models import (
     SipAccountConfig,
     SipCallDirection,
+    SipCallOutcome,
     SipCallState,
     SipIncomingCall,
     SipRegistrationState,
@@ -17,7 +18,7 @@ from telephony.voice.sip.models import (
 
 __all__ = [
     "RfcVoipEngine", "SipAccountConfig", "SipCallDirection", "SipCallNotFoundError",
-    "SipCallState", "SipEngine", "SipEngineError", "SipEngineShutdownTimeout",
+    "SipCallOutcome", "SipCallState", "SipEngine", "SipEngineError", "SipEngineShutdownTimeout",
     "SipEngineStateError", "SipIncomingCall", "SipRegistrationState", "SipTransferResult",
     "TelephonyAudioFormat",
 ]

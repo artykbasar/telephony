@@ -9,7 +9,7 @@ from telephony.runtime.accounts import TelephonyRuntimeAccount
 from telephony.runtime.call_log import TelephonyCallLogWriter
 from telephony.voice.call_state import CallStateError, TelephonyCallDirection, TelephonyCallState, TelephonyCallStateMachine
 from telephony.voice.media.bridge import PcmMediaBridge
-from telephony.voice.sip import RfcVoipEngine, SipIncomingCall, SipRegistrationState
+from telephony.voice.sip import RfcVoipEngine, SipCallState, SipIncomingCall, SipRegistrationState
 
 
 class TelephonyRuntimeError(RuntimeError):
@@ -625,7 +625,13 @@ class TelephonySipRuntime:
                 with self._lock:
                     self._connected_at.setdefault(call_id, time.time())
             if self.call_log_writer is not None:
-                self.call_log_writer.state_changed(account, call_id, state)
+                outcome = None
+                if state == SipCallState.ENDED:
+                    try:
+                        outcome = self.engines[account.agent].terminal_outcome(call_id)
+                    except Exception:
+                        outcome = None
+                self.call_log_writer.state_changed(account, call_id, state, outcome=outcome)
             with self._lock:
                 listeners = list(self._state_listeners)
             for callback in listeners:

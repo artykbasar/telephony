@@ -77,7 +77,8 @@ class _CallLog:
     def __init__(self): self.events = []
     def outgoing_started(self, account, call_id, number): self.events.append(("outgoing", account.user, call_id, number))
     def incoming_started(self, account, call): self.events.append(("incoming", account.user, call.call_id))
-    def state_changed(self, account, call_id, state): self.events.append(("state", account.user, call_id, state.value))
+    def state_changed(self, account, call_id, state, outcome=None):
+        self.events.append(("state", account.user, call_id, state.value, getattr(outcome, "value", None)))
 
 
 def _account(user, username):
@@ -136,7 +137,7 @@ class TelephonySipRuntimeTest(unittest.TestCase):
         self.assertEqual(self.runtime.account_for_call("incoming-b").user, "bob@example.test")
         self.assertIn(("incoming", "alice@example.test", "incoming-a"), self.call_log.events)
         self.created[0].state_callback("incoming-a", __import__("telephony.voice.sip", fromlist=["SipCallState"]).SipCallState.CONNECTED)
-        self.assertIn(("state", "alice@example.test", "incoming-a", "connected"), self.call_log.events)
+        self.assertIn(("state", "alice@example.test", "incoming-a", "connected", None), self.call_log.events)
 
     def test_unknown_user_cannot_borrow_another_agents_registration(self):
         self.runtime.start()

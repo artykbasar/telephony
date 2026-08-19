@@ -34,6 +34,8 @@ venv.bak/
 
 # Dependency directories
 node_modules/
+# Frappe build creates this as a symlink, so the directory-only rule above does not match it.
+telephony/public/node_modules
 jspm_packages/
 
 # IDEs and editors

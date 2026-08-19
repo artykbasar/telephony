@@ -3,14 +3,13 @@ from __future__ import annotations
 import queue
 import threading
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 import frappe
 
 from telephony.push import send_incoming_call_notification
 from telephony.runtime.accounts import TelephonyRuntimeAccount
-from telephony.voice.sip import SipCallState, SipIncomingCall
+from telephony.voice.sip import SipCallOutcome, SipCallState, SipIncomingCall
 
 
 _TERMINAL = {SipCallState.ENDED}
@@ -18,7 +17,6 @@ _STATUS = {
     SipCallState.DIALING: "Initiated",
     SipCallState.RINGING: "Ringing",
     SipCallState.CONNECTED: "In Progress",
-    SipCallState.ENDED: "Completed",
 }
 _STOP = object()
 
@@ -31,6 +29,7 @@ class _CallLogEvent:
     number: str | None = None
     incoming: SipIncomingCall | None = None
     state: SipCallState | None = None
+    outcome: SipCallOutcome | None = None
 
 
 class TelephonyCallLogWriter:
@@ -110,11 +109,14 @@ class TelephonyCallLogWriter:
             return
         self._incoming_started(account, call)
 
-    def state_changed(self, account: TelephonyRuntimeAccount, call_id: str, state: SipCallState) -> None:
+    def state_changed(
+        self, account: TelephonyRuntimeAccount, call_id: str, state: SipCallState,
+        outcome: SipCallOutcome | None = None,
+    ) -> None:
         if self.managed:
-            self._publish(_CallLogEvent("state", account, call_id, state=state))
+            self._publish(_CallLogEvent("state", account, call_id, state=state, outcome=outcome))
             return
-        self._state_changed(account, call_id, state)
+        self._state_changed(account, call_id, state, outcome)
 
     def _publish(self, event: _CallLogEvent) -> None:
         if self._thread is None or not self._ready.is_set() or self._stopped.is_set():
@@ -152,7 +154,7 @@ class TelephonyCallLogWriter:
                     elif item.kind == "incoming" and item.incoming is not None:
                         self._incoming_started(item.account, item.incoming)
                     elif item.kind == "state" and item.state is not None:
-                        self._state_changed(item.account, item.call_id, item.state)
+                        self._state_changed(item.account, item.call_id, item.state, item.outcome)
                 except Exception as exc:
                     try:
                         frappe.db.rollback()
@@ -202,21 +204,44 @@ class TelephonyCallLogWriter:
         )
         send_incoming_call_notification(account.user, call)
 
-    def _state_changed(self, account: TelephonyRuntimeAccount, call_id: str, state: SipCallState) -> None:
+    def _state_changed(
+        self, account: TelephonyRuntimeAccount, call_id: str, state: SipCallState,
+        outcome: SipCallOutcome | None = None,
+    ) -> None:
+        del account
         name = frappe.db.exists("TP Call Log", {"id": call_id})
         if not name:
             return
         doc = frappe.get_doc("TP Call Log", name)
         now = frappe.utils.now_datetime()
-        doc.status = _STATUS[state]
-        if state == SipCallState.CONNECTED and not doc.start_time:
-            doc.start_time = now
-        if state in _TERMINAL:
+        if state == SipCallState.CONNECTED:
+            doc.status = _STATUS[state]
+            if not getattr(doc, "connected_at", None):
+                doc.connected_at = now
+        elif state in _TERMINAL:
+            doc.status = self._terminal_status(doc, outcome)
             doc.end_time = now
-            if doc.start_time:
-                doc.duration = max(0, int((now - doc.start_time).total_seconds()))
+            connected_at = getattr(doc, "connected_at", None)
+            doc.duration = (
+                max(0, int((now - connected_at).total_seconds()))
+                if connected_at else 0
+            )
+        else:
+            doc.status = _STATUS[state]
         doc.save(ignore_permissions=True)
         frappe.db.commit()  # nosemgrep
+
+    @staticmethod
+    def _terminal_status(doc, outcome: SipCallOutcome | None) -> str:
+        if outcome is not None:
+            return outcome.value
+        if getattr(doc, "connected_at", None):
+            return SipCallOutcome.COMPLETED.value
+        if getattr(doc, "type", None) == "Incoming":
+            return SipCallOutcome.NO_ANSWER.value
+        if getattr(doc, "status", None) == "Ringing":
+            return SipCallOutcome.NO_ANSWER.value
+        return SipCallOutcome.FAILED.value
 
     def _upsert(
         self, *, account: TelephonyRuntimeAccount, call_id: str, direction: str,

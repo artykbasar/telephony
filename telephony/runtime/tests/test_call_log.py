@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from telephony.runtime.accounts import TelephonyRuntimeAccount
 from telephony.runtime.call_log import TelephonyCallLogWriter
-from telephony.voice.sip import SipAccountConfig, SipCallState, SipIncomingCall
+from telephony.voice.sip import SipAccountConfig, SipCallOutcome, SipCallState, SipIncomingCall
 
 
 def _account():
@@ -59,16 +59,50 @@ class TelephonyCallLogWriterTest(unittest.TestCase):
         self.assertEqual(send_push.call_args.args[1].call_id, "call-2")
 
     @patch("telephony.runtime.call_log.frappe")
-    def test_terminal_state_calculates_duration_server_side(self, frappe):
-        start = datetime(2026, 8, 17, 12, 0, 0)
-        doc = MagicMock(start_time=start)
+    def test_connected_time_excludes_ringing_from_talk_duration(self, frappe):
+        started = datetime(2026, 8, 17, 12, 0, 0)
+        connected = started + timedelta(seconds=15)
+        ended = connected + timedelta(seconds=42)
+        doc = MagicMock(start_time=started, connected_at=None, type="Outgoing", status="Ringing")
         frappe.db.exists.return_value = "call-3"
         frappe.get_doc.return_value = doc
-        frappe.utils.now_datetime.return_value = start + timedelta(seconds=42)
+        frappe.utils.now_datetime.side_effect = [connected, ended]
+
+        self.writer.state_changed(_account(), "call-3", SipCallState.CONNECTED)
+        self.assertEqual(doc.connected_at, connected)
         self.writer.state_changed(_account(), "call-3", SipCallState.ENDED)
+
         self.assertEqual(doc.status, "Completed")
         self.assertEqual(doc.duration, 42)
-        self.assertEqual(doc.end_time, start + timedelta(seconds=42))
+        self.assertEqual(doc.end_time, ended)
+        self.assertEqual(doc.start_time, started)
+
+    @patch("telephony.runtime.call_log.frappe")
+    def test_unanswered_incoming_call_is_missed_with_zero_talk_duration(self, frappe):
+        started = datetime(2026, 8, 17, 12, 0, 0)
+        ended = started + timedelta(seconds=15)
+        doc = MagicMock(start_time=started, connected_at=None, type="Incoming", status="Ringing")
+        frappe.db.exists.return_value = "call-4"
+        frappe.get_doc.return_value = doc
+        frappe.utils.now_datetime.return_value = ended
+
+        self.writer.state_changed(_account(), "call-4", SipCallState.ENDED, SipCallOutcome.NO_ANSWER)
+
+        self.assertEqual(doc.status, "No Answer")
+        self.assertEqual(doc.duration, 0)
+        self.assertEqual(doc.end_time, ended)
+
+    @patch("telephony.runtime.call_log.frappe")
+    def test_explicit_busy_outcome_is_preserved(self, frappe):
+        doc = MagicMock(connected_at=None, type="Outgoing", status="Ringing")
+        frappe.db.exists.return_value = "call-5"
+        frappe.get_doc.return_value = doc
+        frappe.utils.now_datetime.return_value = datetime(2026, 8, 17, 12, 0, 20)
+
+        self.writer.state_changed(_account(), "call-5", SipCallState.ENDED, SipCallOutcome.BUSY)
+
+        self.assertEqual(doc.status, "Busy")
+        self.assertEqual(doc.duration, 0)
 
     @patch("telephony.runtime.call_log.frappe")
     def test_managed_writer_owns_persistent_frappe_context(self, frappe):
