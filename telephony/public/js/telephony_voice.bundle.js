@@ -100,8 +100,13 @@ class TelephonyVoiceSoftphone {
 		this.transferredCallIds = new Set();
 		this.pendingCallSwitch = null;
 		this.ringTimer = null;
-		this.ringbackTimer = null;
-		this.ringbackNodes = new Set();
+		this.ringbackSource = null;
+		this.ringbackGain = null;
+		this.ringbackLoading = null;
+		this.ringbackGeneration = 0;
+		this.keypadToneSource = null;
+		this.keypadToneGain = null;
+		this.uiAudioBuffers = new Map();
 		this.connectedAt = null;
 		this.durationTimer = null;
 		this.visibleActionRows = 1;
@@ -2917,6 +2922,7 @@ class TelephonyVoiceSoftphone {
 
 	pressDigit(digit) {
 		if (!/^[0-9*#]$/.test(digit)) return;
+		void this.playKeypadTone(digit);
 		const collectingTransferTarget = Boolean(this.blindTransfer || this.attendedTransfer?.state === "preparing");
 		if (!collectingTransferTarget && this.currentCall?.state === "connected") {
 			this.sendDtmf(digit);
@@ -4496,41 +4502,106 @@ class TelephonyVoiceSoftphone {
 		}, 1400);
 	}
 
-	startRingback() {
-		if (this.ringbackTimer) return;
-		const pulse = () => {
-			const context = this.preparedAudioContext;
-			if (!context || context.state === "closed" || this.currentCall?.direction !== "outgoing" || this.currentCall?.state !== "ringing") return;
-			const gain = context.createGain();
-			gain.gain.value = 0.035;
-			gain.connect(context.destination);
-			const oscillators = [440, 480].map((frequency) => {
-				const oscillator = context.createOscillator();
-				oscillator.frequency.value = frequency;
-				oscillator.connect(gain);
-				oscillator.start();
-				this.ringbackNodes.add(oscillator);
-				return oscillator;
-			});
-			setTimeout(() => {
-				for (const oscillator of oscillators) {
-					try { oscillator.stop(); oscillator.disconnect(); } catch (_) {}
-					this.ringbackNodes.delete(oscillator);
-				}
-				try { gain.disconnect(); } catch (_) {}
-			}, 900);
+	uiAudioAsset(name) {
+		return `/assets/telephony/softphone_media/${name}`;
+	}
+
+	async loadUiAudioBuffer(name, context) {
+		if (!this.uiAudioBuffers.has(name)) {
+			const pending = fetch(this.uiAudioAsset(name), { credentials: "same-origin" })
+				.then((response) => {
+					if (!response.ok) throw new Error(`Unable to load Telephony audio asset: ${name}`);
+					return response.arrayBuffer();
+				})
+				.then((data) => context.decodeAudioData(data));
+			this.uiAudioBuffers.set(name, pending);
+		}
+		try {
+			return await this.uiAudioBuffers.get(name);
+		} catch (error) {
+			this.uiAudioBuffers.delete(name);
+			throw error;
+		}
+	}
+
+	async playKeypadTone(digit) {
+		if (!/^[0-9*#]$/.test(digit)) return;
+		const context = this.audioContext || await this.primeAudio({ requireRunning: false });
+		if (!context || context.state === "closed") return;
+		if (context.state !== "running") {
+			try { await this.resumeAudioContext(context, 150); } catch (_) { return; }
+		}
+		const asset = digit === "*" ? "star.wav" : digit === "#" ? "hash.wav" : `${digit}.wav`;
+		let buffer;
+		try { buffer = await this.loadUiAudioBuffer(asset, context); } catch (_) { return; }
+		try { this.keypadToneSource?.stop(); } catch (_) {}
+		try { this.keypadToneSource?.disconnect(); } catch (_) {}
+		try { this.keypadToneGain?.disconnect(); } catch (_) {}
+		const source = context.createBufferSource();
+		const gain = context.createGain();
+		gain.gain.value = 0.18;
+		source.buffer = buffer;
+		source.connect(gain);
+		gain.connect(context.destination);
+		this.keypadToneSource = source;
+		this.keypadToneGain = gain;
+		source.onended = () => {
+			if (this.keypadToneSource === source) this.keypadToneSource = null;
+			if (this.keypadToneGain === gain) this.keypadToneGain = null;
+			try { source.disconnect(); } catch (_) {}
+			try { gain.disconnect(); } catch (_) {}
 		};
-		pulse();
-		this.ringbackTimer = setInterval(pulse, 4000);
+		source.start();
+	}
+
+	startRingback() {
+		if (this.ringbackSource || this.ringbackLoading) return;
+		const callId = this.currentCall?.call_id;
+		if (!callId || this.currentCall?.direction !== "outgoing" || this.currentCall?.state !== "ringing") return;
+		const generation = ++this.ringbackGeneration;
+		const pending = this.startRingbackAudio(callId, generation);
+		this.ringbackLoading = pending;
+		void pending.finally(() => {
+			if (this.ringbackLoading === pending) this.ringbackLoading = null;
+		});
+	}
+
+	async startRingbackAudio(callId, generation) {
+		const context = this.audioContext || await this.primeAudio({ requireRunning: false });
+		if (!context || context.state === "closed") return;
+		let buffer;
+		try { buffer = await this.loadUiAudioBuffer("ring.mp3", context); } catch (_) { return; }
+		if (
+			generation !== this.ringbackGeneration || this.currentCall?.call_id !== callId
+			|| this.currentCall?.direction !== "outgoing" || this.currentCall?.state !== "ringing"
+			|| this.ringbackSource
+		) return;
+		if (context.state !== "running") {
+			try { await this.resumeAudioContext(context, 150); } catch (_) { return; }
+		}
+		if (generation !== this.ringbackGeneration || this.currentCall?.state !== "ringing") return;
+		const source = context.createBufferSource();
+		const gain = context.createGain();
+		gain.gain.value = 0.16;
+		source.buffer = buffer;
+		source.loop = true;
+		source.connect(gain);
+		gain.connect(context.destination);
+		this.ringbackSource = source;
+		this.ringbackGain = gain;
+		source.start();
 	}
 
 	stopRingback() {
-		if (this.ringbackTimer) clearInterval(this.ringbackTimer);
-		this.ringbackTimer = null;
-		for (const oscillator of this.ringbackNodes) {
-			try { oscillator.stop(); oscillator.disconnect(); } catch (_) {}
-		}
-		this.ringbackNodes.clear();
+		this.ringbackGeneration += 1;
+		this.ringbackLoading = null;
+		const source = this.ringbackSource;
+		const gain = this.ringbackGain;
+		this.ringbackSource = null;
+		this.ringbackGain = null;
+		try { source?.stop(); } catch (_) {}
+		try { source?.disconnect(); } catch (_) {}
+		try { gain?.disconnect(); } catch (_) {}
 	}
 
 	startRinging() {

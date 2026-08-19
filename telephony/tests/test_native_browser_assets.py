@@ -54,15 +54,30 @@ class NativeBrowserAssetsTest(unittest.TestCase):
         ):
             self.assertFalse((ROOT / relative).exists(), relative)
 
-    def test_obsolete_webrtc_media_assets_are_not_shipped(self):
+    def test_ui_audio_assets_are_intentionally_shipped(self):
         for name in (
             "0.wav", "1.wav", "2.wav", "3.wav", "4.wav", "5.wav", "6.wav",
-            "7.wav", "8.wav", "9.wav", "hash.wav", "star.wav", "silence.wav",
-            "ring.mp3", "arrow-repeat.svg", "contact_avatar.svg", "resume_audio.svg",
-            "transfer_back.svg",
+            "7.wav", "8.wav", "9.wav", "hash.wav", "star.wav", "ring.mp3",
+        ):
+            self.assertTrue((self.media_dir / name).exists(), name)
+        for name in (
+            "silence.wav", "arrow-repeat.svg", "contact_avatar.svg",
+            "resume_audio.svg", "transfer_back.svg",
         ):
             self.assertFalse((self.media_dir / name).exists(), name)
         self.assertTrue(self.push_avatar.exists())
+
+    def test_keypad_audio_is_local_feedback_while_dtmf_remains_sip_control(self):
+        self.assertIn("void this.playKeypadTone(digit);", self.main)
+        self.assertIn('digit === "*" ? "star.wav" : digit === "#" ? "hash.wav"', self.main)
+        self.assertIn('this.voiceWorker.postMessage({ type: "dtmf", callId: this.currentCall.call_id, digit });', self.main)
+        self.assertIn("context.createBufferSource()", self.main)
+
+    def test_outgoing_ringback_uses_audio_asset_not_synthesized_oscillators(self):
+        self.assertIn('this.loadUiAudioBuffer("ring.mp3", context)', self.main)
+        self.assertIn("source.loop = true", self.main)
+        self.assertNotIn("createOscillator", self.main)
+        self.assertNotIn("ringbackTimer", self.main)
 
     def test_dial_control_sends_only_number(self):
         self.assertIn('sendJson("call.dial", { number: data.number })', self.worker)
