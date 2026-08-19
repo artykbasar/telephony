@@ -74,22 +74,24 @@ class NativeBrowserAssetsTest(unittest.TestCase):
         self.assertIn("context.createBufferSource()", self.main)
 
     def test_ring_mp3_is_incoming_ringtone_only(self):
-        ringtone = self.main[self.main.index("\tprepareRingtoneAudio() {"):self.main.index("\n\tsyncDurationFromServer", self.main.index("\tprepareRingtoneAudio() {"))]
-        self.assertIn('new Audio(this.uiAudioAsset("ring.mp3"))', ringtone)
-        self.assertIn("audio.loop = true", ringtone)
+        ringtone = self.main[self.main.index("\tprepareUiAudioContext() {"):self.main.index("\n\tsyncDurationFromServer", self.main.index("\tprepareUiAudioContext() {"))]
+        self.assertIn('this.loadUiAudioBuffer("ring.mp3", context)', ringtone)
+        self.assertIn("source.loop = true", ringtone)
         self.assertIn('this.currentCall?.direction !== "incoming"', ringtone)
-        self.assertIn("await audio.play()", ringtone)
-        self.assertNotIn('this.loadUiAudioBuffer("ring.mp3"', ringtone)
+        self.assertNotIn("new Audio(", ringtone)
 
-    def test_incoming_ringtone_is_preloaded_and_armed_by_user_gesture(self):
-        self.assertIn("this.prepareRingtoneAudio();", self.main)
-        self.assertIn('["pointerdown", "keydown", "touchstart"]', self.main)
-        self.assertIn("await audio.play();", self.main)
-        self.assertIn("this.ringtoneArmed = true", self.main)
+    def test_incoming_ringtone_uses_persistent_context_unlocked_by_trusted_gesture(self):
+        self.assertIn("this.installUiAudioUnlock();", self.main)
+        self.assertIn('["click", "keydown"]', self.main)
+        self.assertIn("if (!event?.isTrusted) return;", self.main)
+        self.assertIn("if (context.state !== \"running\") await context.resume();", self.main)
+        self.assertIn("this.uiAudioReady = true", self.main)
+        self.assertNotIn("audio.volume = 0", self.main)
+        self.assertIn('[__("Ringtone"), snapshot.ui_audio.ready ? __("Ready") : __("Needs interaction")', self.main)
         self.assertIn('frappe.utils?.play_sound?.("alert")', self.main)
 
     def test_outgoing_ringback_keeps_original_synthesized_call_progress_tone(self):
-        ringback = self.main[self.main.index("\tstartRingback() {"):self.main.index("\n\tprepareRingtoneAudio()", self.main.index("\tstartRingback() {"))]
+        ringback = self.main[self.main.index("\tstartRingback() {"):self.main.index("\n\tprepareUiAudioContext()", self.main.index("\tstartRingback() {"))]
         self.assertIn("context.createOscillator()", ringback)
         self.assertIn("const oscillators = [440, 480]", ringback)
         self.assertIn("this.ringbackTimer = setInterval(pulse, 4000)", ringback)
