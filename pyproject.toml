@@ -11,6 +11,12 @@ dependencies = [
     # "frappe~=15.0.0" # Installed and managed by bench.
     "twilio==8.5.0",
     "bleach~=6.3.0",
+    "rfcvoip==2.10.2",
+    "G722>=1.2.8,<2",
+    "opuslib-next-bundled==0.1.1",
+    "websockets>=15,<16",
+    "cryptography>=45,<47",
+    "phonenumbers>=9,<10",
 ]
 
 [build-system]

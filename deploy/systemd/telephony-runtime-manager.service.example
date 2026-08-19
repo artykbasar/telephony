@@ -1,0 +1,19 @@
+# Copy to /etc/systemd/system after replacing placeholders.
+[Unit]
+Description=Frappe Telephony native SIP runtime manager
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__BENCH_USER__
+WorkingDirectory=__BENCH_PATH__
+ExecStart=__BENCH_PATH__/env/bin/python -m frappe.utils.bench_helper frappe telephony-runtime-manager
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+KillMode=control-group
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

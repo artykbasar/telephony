@@ -108,8 +108,6 @@
 		"L": true,
 		"Chart": true,
 		"DataTable": true,
-		"Cypress": true,
-		"cy": true,
 		"it": true,
 		"describe": true,
 		"expect": true,

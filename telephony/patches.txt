@@ -4,3 +4,5 @@
 
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
+telephony.patches.v1_0.migrate_webrtc_sip_to_native
+telephony.patches.v1_0.remove_sip_telemetry

@@ -477,20 +477,23 @@ class IntegrationTestTPOTP(IntegrationTestCase):
         mock_dispatch_email.assert_not_called()
 
     def test_email_otp_is_redacted_from_the_email_queue(self):
-        """Email Queue keeps the body for 30 days."""
-        import inspect
+        """Use native queue redaction when available and a safe fallback otherwise."""
+        from telephony import email_otp
 
-        from telephony.email_otp import dispatch_email_otp
-
+        callbacks = frappe.db.after_commit._functions
+        callback_count = len(callbacks)
         with patch("frappe.sendmail") as mock_sendmail:
-            dispatch_email_otp(TEST_EMAIL, "Your OTP is 123456.", "Code")
+            mock_sendmail.return_value.name = "queue-test"
+            email_otp.dispatch_email_otp(TEST_EMAIL, "Your OTP is 123456.", "Code")
 
         _, kwargs = mock_sendmail.call_args
-        self.assertTrue(kwargs.get("redact_message_after_send"))
-        # guard against the kwarg being silently dropped by a frappe upgrade
-        self.assertIn(
-            "redact_message_after_send", inspect.signature(frappe.sendmail).parameters
-        )
+        if email_otp._SENDMAIL_SUPPORTS_REDACTION:
+            self.assertTrue(kwargs.get("redact_message_after_send"))
+            self.assertEqual(len(callbacks), callback_count)
+        else:
+            self.assertTrue(kwargs.get("now"))
+            self.assertEqual(len(callbacks), callback_count + 1)
+            callbacks.pop()  # do not run the fake queue callback at test commit
 
     def test_clean_phone_number_rejects_non_ascii_digits(self):
         """str.isdigit() is true for fullwidth/Arabic-Indic digits, which

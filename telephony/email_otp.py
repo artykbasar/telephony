@@ -1,9 +1,16 @@
+from email.parser import Parser
+from email.policy import SMTP
 from email.utils import parseaddr
+import inspect
 
 import frappe
 from frappe import _
 from frappe.rate_limiter import rate_limit
 from frappe.utils import split_emails, validate_email_address
+
+_SENDMAIL_SUPPORTS_REDACTION = "redact_message_after_send" in inspect.signature(frappe.sendmail).parameters
+_REDACTED_MESSAGE = "[THE FOLLOWING CONTENT HAS BEEN REDACTED FOR SECURITY REASONS]"
+
 
 from telephony.otp import (
     GENERATE_LIMIT,
@@ -48,15 +55,36 @@ def get_email_otp_settings():
     return settings
 
 
-def dispatch_email_otp(email, message, subject):
-    # redact_message_after_send: Email Queue keeps the body for 30 days, so
-    # without this the cleartext OTP outlives its own expiry.
-    frappe.sendmail(
-        recipients=[email],
-        subject=subject,
-        message=message,
-        redact_message_after_send=True,
+def _redact_sent_queue_message(queue_name):
+    status, message = frappe.db.get_value(
+        "Email Queue", queue_name, ["status", "message"]
+    ) or (None, None)
+    if status != "Sent" or not message:
+        return
+
+    parsed = Parser(policy=SMTP).parsestr(message)
+    parsed.clear_content()
+    parsed.set_content(_REDACTED_MESSAGE)
+    frappe.db.set_value(
+        "Email Queue", queue_name, "message", parsed.as_string(), update_modified=False
     )
+    frappe.db.commit()
+
+
+def dispatch_email_otp(email, message, subject):
+    kwargs = {"recipients": [email], "subject": subject, "message": message}
+    if _SENDMAIL_SUPPORTS_REDACTION:
+        frappe.sendmail(**kwargs, redact_message_after_send=True)
+        return
+
+    # Older supported Frappe versions have no redaction flag. Send immediately
+    # after commit, then redact only after a successful send so retries retain
+    # the original body if delivery fails.
+    queue = frappe.sendmail(**kwargs, now=True)
+    if queue and getattr(queue, "name", None):
+        frappe.db.after_commit.add(
+            lambda queue_name=queue.name: _redact_sent_queue_message(queue_name)
+        )
 
 
 # ip_based=False: the default mixes in the client IP, so rotating IPs would

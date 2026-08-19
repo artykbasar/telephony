@@ -1,0 +1,19 @@
+; Copy beside the Supervisor configuration generated for your Bench.
+; Replace __BENCH_PATH__, __BENCH_USER__, and __BENCH_NAME__.
+[program:__BENCH_NAME__-telephony-runtime-manager]
+command=__BENCH_PATH__/env/bin/python -m frappe.utils.bench_helper frappe telephony-runtime-manager
+directory=__BENCH_PATH__
+user=__BENCH_USER__
+autostart=true
+autorestart=true
+startsecs=5
+stopsignal=TERM
+stopwaitsecs=15
+stopasgroup=true
+killasgroup=true
+stdout_logfile=__BENCH_PATH__/logs/telephony-runtime-manager.log
+stderr_logfile=__BENCH_PATH__/logs/telephony-runtime-manager.error.log
+stdout_logfile_maxbytes=50MB
+stdout_logfile_backups=10
+stderr_logfile_maxbytes=50MB
+stderr_logfile_backups=10

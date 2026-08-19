@@ -6,10 +6,7 @@ on:
       - main
       - develop
     paths-ignore:
-      - "**.css"
-      - "**.js"
       - "**.md"
-      - "**.html"
       - "**.csv"
 
 concurrency:
@@ -37,10 +34,10 @@ jobs:
 
     steps:
       - name: Clone
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.14"
 
@@ -53,7 +50,7 @@ jobs:
           fi
 
       - name: Setup Node
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
           node-version: 24
           check-latest: true
@@ -84,7 +81,7 @@ jobs:
 
       - name: Get yarn cache directory path
         id: yarn-cache-dir-path
-        run: echo "::set-output name=dir::$(yarn cache dir)"
+        run: echo "dir=$(yarn cache dir)" >> "$GITHUB_OUTPUT"
 
       - uses: actions/cache@v4
         id: yarn-cache
@@ -97,3 +94,20 @@ jobs:
       - name: Install
         run: |
           bash ${GITHUB_WORKSPACE}/.github/helpers/install.sh
+
+      - name: Check Telephony browser syntax
+        run: |
+          node --check telephony/public/js/telephony_voice.bundle.js
+          node --check telephony/public/js/telephony_voice_transport_worker.bundle.js
+          node --check telephony/public/js/telephony_push_worker.bundle.js
+
+      - name: Run Telephony tests
+        run: |
+          cd ~/frappe-bench
+          bench --site test_site run-tests --app telephony
+
+      - name: Verify migrate and production assets
+        run: |
+          cd ~/frappe-bench
+          bench --site test_site migrate
+          bench build --app telephony

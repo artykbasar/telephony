@@ -11,6 +11,30 @@
   "column_break_lekf",
   "mobile_no",
   "default_medium",
+  "section_break_sip",
+  "sip_enabled",
+  "sip_username",
+  "column_break_sip_creds",
+  "sip_password",
+  "sip_display_name",
+  "sip_extension",
+  "section_break_sip_override",
+  "override_sip_settings",
+  "sip_override_server",
+  "sip_override_port",
+  "sip_override_transport",
+  "column_break_sip_override",
+  "sip_override_local_bind_address",
+  "sip_override_advertised_address",
+  "sip_override_tls_server_name",
+  "sip_override_proxy",
+  "sip_override_proxy_port",
+  "sip_server",
+  "sip_realm",
+  "section_break_stun",
+  "use_global_stun_turn",
+  "sip_stun_servers",
+  "sip_turn_servers",
   "section_break_riia",
   "twilio",
   "twilio_number",
@@ -53,7 +77,166 @@
    "fieldname": "default_medium",
    "fieldtype": "Select",
    "label": "Default Medium",
-   "options": "\nTwilio\nExotel"
+   "options": "\nTwilio\nExotel\nSIP"
+  },
+  {
+   "fieldname": "section_break_sip",
+   "fieldtype": "Section Break",
+   "label": "SIP"
+  },
+  {
+   "default": "0",
+   "fieldname": "sip_enabled",
+   "fieldtype": "Check",
+   "label": "SIP"
+  },
+  {
+   "depends_on": "sip_enabled",
+   "description": "Override global WSS if needed, e.g. wss://pbx.example.com:8089/ws",
+   "fieldname": "sip_server",
+   "fieldtype": "Data",
+   "label": "SIP Server (WSS URI)",
+   "hidden": 1
+  },
+  {
+   "depends_on": "sip_enabled",
+   "fieldname": "sip_realm",
+   "fieldtype": "Data",
+   "label": "Realm / Domain",
+   "hidden": 1
+  },
+  {
+   "depends_on": "sip_enabled",
+   "fieldname": "sip_username",
+   "fieldtype": "Data",
+   "label": "SIP Username"
+  },
+  {
+   "fieldname": "column_break_sip_creds",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "sip_enabled",
+   "fieldname": "sip_password",
+   "fieldtype": "Password",
+   "label": "SIP Password"
+  },
+  {
+   "depends_on": "sip_enabled",
+   "fieldname": "sip_display_name",
+   "fieldtype": "Data",
+   "label": "Display Name"
+  },
+  {
+   "depends_on": "sip_enabled",
+   "fieldname": "sip_extension",
+   "fieldtype": "Data",
+   "label": "Extension"
+  },
+  {
+   "fieldname": "section_break_sip_override",
+   "fieldtype": "Section Break",
+   "label": "Native SIP Server Override",
+   "depends_on": "sip_enabled"
+  },
+  {
+   "default": "0",
+   "fieldname": "override_sip_settings",
+   "fieldtype": "Check",
+   "label": "Override SIP Settings",
+   "depends_on": "sip_enabled",
+   "description": "Use agent-specific native SIP server/network settings instead of TP SIP Settings."
+  },
+  {
+   "fieldname": "sip_override_server",
+   "fieldtype": "Data",
+   "label": "SIP Server",
+   "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings",
+   "mandatory_depends_on": "eval:doc.sip_enabled && doc.override_sip_settings",
+   "description": "Agent-specific native SIP PBX hostname or IP address."
+  },
+  {
+   "fieldname": "sip_override_port",
+   "fieldtype": "Int",
+   "label": "SIP Port",
+   "default": "5060",
+   "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings",
+   "description": "Remote PBX SIP port for this agent. Local SIP port remains dynamically allocated."
+  },
+  {
+   "fieldname": "sip_override_transport",
+   "fieldtype": "Select",
+   "label": "Transport",
+   "options": "UDP\nTCP\nTLS",
+   "default": "UDP",
+   "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings"
+  },
+  {
+   "fieldname": "column_break_sip_override",
+   "fieldtype": "Column Break",
+   "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings"
+  },
+  {
+   "fieldname": "sip_override_local_bind_address",
+   "fieldtype": "Data",
+   "label": "Local Bind Address",
+   "default": "0.0.0.0",
+   "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings",
+   "description": "Local interface/IP for this agent only. The OS chooses the local SIP port automatically."
+  },
+  {
+   "fieldname": "sip_override_advertised_address",
+   "fieldtype": "Data",
+   "label": "Advertised Address",
+   "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings",
+   "description": "Optional address advertised in SIP/SDP for this agent."
+  },
+  {
+   "fieldname": "sip_override_tls_server_name",
+   "fieldtype": "Data",
+   "label": "TLS Server Name",
+   "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings && doc.sip_override_transport==\"TLS\""
+  },
+  {
+   "fieldname": "sip_override_proxy",
+   "fieldtype": "Data",
+   "label": "Proxy",
+   "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings"
+  },
+  {
+   "fieldname": "sip_override_proxy_port",
+   "fieldtype": "Int",
+   "label": "Proxy Port",
+   "depends_on": "eval:doc.sip_enabled && doc.override_sip_settings && doc.sip_override_proxy"
+  },
+  {
+   "fieldname": "section_break_stun",
+   "fieldtype": "Section Break",
+   "label": "STUN / TURN",
+   "hidden": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "use_global_stun_turn",
+   "fieldtype": "Check",
+   "label": "Use Global STUN/TURN",
+   "hidden": 1
+  },
+  {
+   "depends_on": "eval:doc.sip_enabled && !doc.use_global_stun_turn",
+   "description": "One per line, e.g. stun:stun.l.google.com:19302",
+   "fieldname": "sip_stun_servers",
+   "fieldtype": "Small Text",
+   "label": "STUN Servers",
+   "hidden": 1
+  },
+  {
+   "depends_on": "eval:doc.sip_enabled && !doc.use_global_stun_turn",
+   "description": "One per line, e.g. turn:turn.example.com:5349?transport=tcp|user|pass",
+   "fieldname": "sip_turn_servers",
+   "fieldtype": "Small Text",
+   "label": "TURN Servers",
+   "hidden": 1
   },
   {
    "fieldname": "section_break_riia",
