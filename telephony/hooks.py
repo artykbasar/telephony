@@ -93,6 +93,7 @@ app_include_js = ["telephony_voice.bundle.js"]
 
 # before_install = "telephony.install.before_install"
 # after_install = "telephony.install.after_install"
+after_migrate = ["telephony.runtime.watchdog.ensure_runtime_manager"]
 
 # Uninstallation
 # ------------
@@ -149,23 +150,11 @@ app_include_js = ["telephony_voice.bundle.js"]
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-# 	"all": [
-# 		"telephony.tasks.all"
-# 	],
-# 	"daily": [
-# 		"telephony.tasks.daily"
-# 	],
-# 	"hourly": [
-# 		"telephony.tasks.hourly"
-# 	],
-# 	"weekly": [
-# 		"telephony.tasks.weekly"
-# 	],
-# 	"monthly": [
-# 		"telephony.tasks.monthly"
-# 	],
-# }
+scheduler_events = {
+	"all": [
+		"telephony.runtime.watchdog.ensure_runtime_manager",
+	],
+}
 
 # Testing
 # -------

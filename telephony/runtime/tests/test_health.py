@@ -25,5 +25,12 @@ class RuntimeHealthTest(unittest.TestCase):
             with patch("telephony.runtime.health.os.kill", side_effect=ProcessLookupError):
                 self.assertEqual(read_runtime_status(site=site, bench_path=bench), {"ready": False})
 
+    def test_fresh_heartbeat_allows_cross_container_pid(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bench = Path(temp); site = "a.test"; path = runtime_status_path(site=site, bench_path=bench); path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"site": site, "pid": 99999999, "state": "ready", "voice_running": True, "heartbeat_at": 100.0, "registrations": {"alice": "registered"}}))
+            self.assertTrue(read_runtime_status(site=site, bench_path=bench, now=101.0)["ready"])
+            self.assertEqual(read_runtime_status(site=site, bench_path=bench, now=106.0), {"ready": False})
+
 
 if __name__ == "__main__": unittest.main()

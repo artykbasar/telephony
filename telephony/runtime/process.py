@@ -70,6 +70,7 @@ class TelephonyRuntimeProcess:
             "pid": os.getpid(),
             "state": state,
             "started_at": self.started_at,
+            "heartbeat_at": time.time(),
             "voice_socket": str(self.voice_server.socket_path) if self.voice_server else None,
             "voice_running": bool(self.voice_server and self.voice_server.running),
             "registrations": self.runtime.registration_snapshot() if self.runtime else {},

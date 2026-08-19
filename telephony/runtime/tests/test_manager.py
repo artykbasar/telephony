@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
 from telephony.runtime.manager import TelephonyRuntimeManager, runtime_disabled, site_runtime_disabled
+from telephony.runtime.manager_state import read_manager_status
 
 
 class _Child:
@@ -88,6 +91,39 @@ class TelephonyRuntimeManagerTest(unittest.TestCase):
             removed = manager.children["b.test"]; desired.remove("b.test"); manager.reconcile_once()
             self.assertTrue(removed.terminated)
             self.assertNotIn("b.test", manager.children)
+
+    def test_manager_heartbeat_and_lifetime_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            bench = Path(temp)
+            manager = TelephonyRuntimeManager(
+                bench_path=bench,
+                site_provider=lambda: (),
+                poll_interval=0.01,
+                site_discovery_interval=0,
+                heartbeat_interval=0.01,
+            )
+            thread = threading.Thread(
+                target=lambda: manager.run(install_signal_handlers=False),
+                daemon=True,
+            )
+            thread.start()
+            deadline = time.time() + 1.0
+            while time.time() < deadline:
+                status = read_manager_status(bench_path=bench)
+                if status.get("state") == "ready":
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("runtime manager did not publish a ready heartbeat")
+
+            duplicate = TelephonyRuntimeManager(bench_path=bench, site_provider=lambda: ())
+            self.assertEqual(duplicate.run(install_signal_handlers=False), 0)
+            self.assertTrue(thread.is_alive())
+
+            manager.request_stop()
+            thread.join(timeout=1.0)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(read_manager_status(bench_path=bench), {})
 
 
 if __name__ == "__main__": unittest.main()

@@ -7,12 +7,20 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
 
 from telephony.local_https.config import local_https_status_path, load_local_https_runtime_config
 from telephony.runtime.health import read_runtime_status
+from telephony.runtime.manager_state import (
+    MANAGER_HEARTBEAT_INTERVAL,
+    acquire_manager_lock,
+    release_manager_lock,
+    remove_manager_status,
+    write_manager_status,
+)
 
 
 class RuntimeChild(Protocol):
@@ -61,7 +69,18 @@ def runtime_service_running(*, site: str, bench_path: Path) -> bool:
 
 
 class TelephonyRuntimeManager:
-    def __init__(self, *, bench_path: Path, site_provider: SiteProvider, process_factory: ProcessFactory | None = None, poll_interval: float = 5.0, site_discovery_interval: float = 60.0, restart_backoff: float = 2.0, shutdown_timeout: float = 8.0) -> None:
+    def __init__(
+        self,
+        *,
+        bench_path: Path,
+        site_provider: SiteProvider,
+        process_factory: ProcessFactory | None = None,
+        poll_interval: float = 5.0,
+        site_discovery_interval: float = 60.0,
+        restart_backoff: float = 2.0,
+        shutdown_timeout: float = 8.0,
+        heartbeat_interval: float = MANAGER_HEARTBEAT_INTERVAL,
+    ) -> None:
         self.bench_path = Path(bench_path).resolve()
         self.site_provider = site_provider
         self.process_factory = process_factory or self._spawn
@@ -69,6 +88,7 @@ class TelephonyRuntimeManager:
         self.site_discovery_interval = max(0.0, float(site_discovery_interval))
         self.restart_backoff = max(0.0, float(restart_backoff))
         self.shutdown_timeout = max(0.1, float(shutdown_timeout))
+        self.heartbeat_interval = max(0.1, float(heartbeat_interval))
         self.stop_event = threading.Event()
         self.children: dict[str, RuntimeChild] = {}
         self.local_https_children: dict[str, RuntimeChild] = {}
@@ -76,23 +96,75 @@ class TelephonyRuntimeManager:
         self._local_https_restart_after: dict[str, float] = {}
         self._desired_sites: set[str] = set()
         self._next_site_discovery_at = 0.0
+        self._manager_lock = None
+        self._manager_instance_id = ""
+        self._manager_started_at = 0.0
+        self._manager_state = "starting"
+        self._heartbeat_thread: threading.Thread | None = None
 
     def run(self, *, install_signal_handlers: bool = True) -> int:
+        manager_lock = acquire_manager_lock(bench_path=self.bench_path)
+        if manager_lock is None:
+            print(f"TELEPHONY_RUNTIME_MANAGER_ALREADY_RUNNING bench={self.bench_path}", flush=True)
+            return 0
+        self._manager_lock = manager_lock
+        self._manager_instance_id = uuid.uuid4().hex
+        self._manager_started_at = time.time()
+        self._manager_state = "starting"
+        self._write_manager_status()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            name="Telephony Runtime Manager Heartbeat",
+            daemon=True,
+        )
+        self._heartbeat_thread.start()
         if install_signal_handlers and threading.current_thread() is threading.main_thread():
             for sig in (signal.SIGINT, signal.SIGTERM):
                 signal.signal(sig, lambda *_: self.request_stop())
+        self._manager_state = "ready"
+        self._write_manager_status()
         print(f"TELEPHONY_RUNTIME_MANAGER_READY bench={self.bench_path}", flush=True)
         try:
             while not self.stop_event.is_set():
                 self.reconcile_once()
                 self.stop_event.wait(self.poll_interval)
         finally:
+            self._manager_state = "stopping"
+            self._write_manager_status()
+            self.stop_event.set()
             self.stop_all()
+            if self._heartbeat_thread is not None:
+                self._heartbeat_thread.join(timeout=self.heartbeat_interval + 1.0)
+            remove_manager_status(
+                bench_path=self.bench_path,
+                expected_instance_id=self._manager_instance_id,
+            )
+            release_manager_lock(self._manager_lock)
+            self._manager_lock = None
             print("TELEPHONY_RUNTIME_MANAGER_STOPPED", flush=True)
         return 0
 
     def request_stop(self) -> None:
         self.stop_event.set()
+
+    def _write_manager_status(self) -> None:
+        write_manager_status(
+            bench_path=self.bench_path,
+            state=self._manager_state,
+            instance_id=self._manager_instance_id,
+            pid=os.getpid(),
+            started_at=self._manager_started_at,
+        )
+
+    def _heartbeat_loop(self) -> None:
+        while not self.stop_event.wait(self.heartbeat_interval):
+            try:
+                self._write_manager_status()
+            except OSError as exc:
+                print(
+                    f"TELEPHONY_RUNTIME_MANAGER_HEARTBEAT_ERROR error={type(exc).__name__}",
+                    flush=True,
+                )
 
     def reconcile_once(self) -> None:
         now = time.monotonic()
