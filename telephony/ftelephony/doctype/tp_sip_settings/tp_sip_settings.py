@@ -11,6 +11,7 @@ from frappe import _
 from frappe.model.document import Document
 
 from telephony.local_https.config import format_https_url, normalise_local_https_host
+from telephony.runtime.config_reload import schedule_runtime_config_reload
 
 
 class TPSIPSettings(Document):
@@ -36,6 +37,7 @@ class TPSIPSettings(Document):
 
     def on_update(self):
         sync_local_https_runtime_config(self)
+        schedule_runtime_config_reload()
 
     def _validate_local_https(self):
         port = int(self.local_https_port or 8443)

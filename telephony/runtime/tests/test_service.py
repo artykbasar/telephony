@@ -81,10 +81,10 @@ class _CallLog:
         self.events.append(("state", account.user, call_id, state.value, getattr(outcome, "value", None)))
 
 
-def _account(user, username):
+def _account(user, username, *, server="pbx.example.test"):
     return TelephonyRuntimeAccount(
         agent=user, user=user, extension=username, display_name=user,
-        config=SipAccountConfig(server="pbx.example.test", username=username, password="secret"),
+        config=SipAccountConfig(server=server, username=username, password="secret"),
     )
 
 
@@ -267,6 +267,72 @@ class TelephonySipRuntimeTest(unittest.TestCase):
         self.assertGreaterEqual(first.register_count, 2)
         self.assertEqual(first.registration_state, SipRegistrationState.REGISTERED)
         self.assertEqual(second.register_count, 1)
+
+    def test_reconcile_changed_account_reloads_only_that_agent_and_drops_its_call(self):
+        self.runtime.start()
+        first, second = self.created
+        call_id = self.runtime.dial(user="alice@example.test", number="3000")
+        changed_alice = _account("alice@example.test", "2001", server="asterisk")
+        bob = _account("bob@example.test", "2002")
+
+        changes = self.runtime.reconcile_accounts((changed_alice, bob))
+
+        self.assertEqual(changes, {
+            "added": (), "changed": ("alice@example.test",), "removed": (),
+        })
+        self.assertEqual(len(self.created), 3)
+        replacement = self.created[2]
+        self.assertIs(self.runtime.engines["alice@example.test"], replacement)
+        self.assertIs(self.runtime.engines["bob@example.test"], second)
+        self.assertFalse(first.started)
+        self.assertTrue(second.started)
+        self.assertEqual(second.register_count, 1)
+        self.assertEqual(replacement.config.server, "asterisk")
+        self.assertEqual(replacement.register_count, 1)
+        self.assertIn(("hangup", call_id), first.actions)
+        self.assertEqual(self.runtime.calls.get(call_id).state.value, "disconnecting")
+        self.assertEqual(self.runtime.registration_snapshot(), {
+            "alice@example.test": "registered", "bob@example.test": "registered",
+        })
+
+    def test_reconcile_unchanged_accounts_does_not_reload_engines(self):
+        self.runtime.start()
+        first, second = self.created
+
+        changes = self.runtime.reconcile_accounts((
+            _account("alice@example.test", "2001"),
+            _account("bob@example.test", "2002"),
+        ))
+
+        self.assertEqual(changes, {"added": (), "changed": (), "removed": ()})
+        self.assertEqual(self.created, [first, second])
+        self.assertEqual(first.register_count, 1)
+        self.assertEqual(second.register_count, 1)
+
+    def test_reconcile_adds_and_removes_only_affected_agents(self):
+        self.runtime.start()
+        alice_engine, bob_engine = self.created
+        bob_call = self.runtime.dial(user="bob@example.test", number="3000")
+        alice = _account("alice@example.test", "2001")
+        charlie = _account("charlie@example.test", "2003")
+
+        changes = self.runtime.reconcile_accounts((alice, charlie))
+
+        self.assertEqual(changes, {
+            "added": ("charlie@example.test",),
+            "changed": (),
+            "removed": ("bob@example.test",),
+        })
+        self.assertIs(self.runtime.engines["alice@example.test"], alice_engine)
+        self.assertFalse(bob_engine.started)
+        self.assertIn(("hangup", bob_call), bob_engine.actions)
+        self.assertNotIn("bob@example.test", self.runtime.engines)
+        self.assertEqual(self.runtime.engines["charlie@example.test"].config.username, "2003")
+        with self.assertRaises(TelephonyRuntimeAccountNotFound):
+            self.runtime.account_for_user("bob@example.test")
+        with self.assertRaises(TelephonyRuntimeAccountNotFound):
+            self.runtime.account_for_call(bob_call)
+        self.assertEqual(self.runtime.active_call_snapshots(user="alice@example.test"), [])
 
 
 if __name__ == "__main__":

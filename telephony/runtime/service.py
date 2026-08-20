@@ -41,6 +41,9 @@ class TelephonySipRuntime:
         self.accounts = tuple(accounts)
         if len({account.user for account in self.accounts}) != len(self.accounts):
             raise TelephonyRuntimeError("Each Frappe user may own only one enabled SIP runtime account.")
+        if len({account.agent for account in self.accounts}) != len(self.accounts):
+            raise TelephonyRuntimeError("Each enabled Telephony agent may own only one SIP runtime account.")
+        self._engine_factory = engine_factory
         self._by_user = {account.user: account for account in self.accounts}
         self._by_agent = {account.agent: account for account in self.accounts}
         self.engines = {account.agent: engine_factory() for account in self.accounts}
@@ -67,6 +70,10 @@ class TelephonySipRuntime:
         self._registration_recovery_backoff = tuple(max(0.01, float(x)) for x in registration_recovery_backoff) or (1.0,)
         self._monitor_thread: threading.Thread | None = None
         self._recovering: set[str] = set()
+        self._reloading: set[str] = set()
+        self._account_operation_locks: dict[str, threading.Lock] = {
+            account.agent: threading.Lock() for account in self.accounts
+        }
 
     def start(self) -> None:
         with self._lock:
@@ -154,9 +161,13 @@ class TelephonySipRuntime:
 
     def account_for_user(self, user: str) -> TelephonyRuntimeAccount:
         try:
-            return self._by_user[user]
+            account = self._by_user[user]
         except KeyError as exc:
             raise TelephonyRuntimeAccountNotFound(f"No enabled SIP agent for user {user}.") from exc
+        with self._lock:
+            if account.agent in self._reloading:
+                raise TelephonyRuntimeError("SIP account configuration is being reloaded.")
+        return account
 
     def dial(self, *, user: str, number: str) -> str:
         account = self.account_for_user(user)
@@ -185,10 +196,191 @@ class TelephonySipRuntime:
         return self.engines[account.agent]
 
     def registration_snapshot(self) -> dict[str, str]:
+        with self._lock:
+            accounts = tuple(self.accounts)
+            engines = dict(self.engines)
+            reloading = set(self._reloading)
         return {
-            account.user: self.engines[account.agent].registration_state.value
-            for account in self.accounts
+            account.user: (
+                SipRegistrationState.REGISTERING.value
+                if account.agent in reloading
+                else engines[account.agent].registration_state.value
+            )
+            for account in accounts
+            if account.agent in engines
         }
+
+    def reconcile_accounts(self, accounts: tuple[TelephonyRuntimeAccount, ...]) -> dict[str, tuple[str, ...]]:
+        desired = tuple(accounts)
+        if len({account.user for account in desired}) != len(desired):
+            raise TelephonyRuntimeError("Each Frappe user may own only one enabled SIP runtime account.")
+        if len({account.agent for account in desired}) != len(desired):
+            raise TelephonyRuntimeError("Each enabled Telephony agent may own only one SIP runtime account.")
+
+        with self._lock:
+            current = dict(self._by_agent)
+        wanted = {account.agent: account for account in desired}
+        removed = tuple(sorted(set(current) - set(wanted)))
+        added = tuple(sorted(set(wanted) - set(current)))
+        changed = tuple(sorted(
+            agent for agent in set(current).intersection(wanted)
+            if current[agent] != wanted[agent]
+        ))
+
+        for agent in removed:
+            self._remove_account(agent)
+        for agent in changed:
+            self._replace_account(wanted[agent])
+        for agent in added:
+            self._add_account(wanted[agent])
+
+        with self._lock:
+            self.accounts = desired
+            self._by_user = {account.user: account for account in desired}
+            self._by_agent = {account.agent: account for account in desired}
+        return {"added": added, "changed": changed, "removed": removed}
+
+    def _account_operation_lock(self, agent: str) -> threading.Lock:
+        with self._lock:
+            return self._account_operation_locks.setdefault(agent, threading.Lock())
+
+    def _prepare_engine(self, account: TelephonyRuntimeAccount):
+        engine = self._engine_factory()
+        engine.on_incoming_call(self._incoming_handler(account))
+        engine.on_call_state(self._state_handler(account))
+        engine.start()
+        return engine
+
+    def _register_reloaded_engine(self, account: TelephonyRuntimeAccount, engine) -> None:
+        try:
+            state = engine.register_account(account.config)
+        except BaseException as exc:
+            print(
+                f"TELEPHONY_SIP_ACCOUNT_RELOAD_ERROR agent={account.agent} error={type(exc).__name__}",
+                flush=True,
+            )
+            return
+        print(
+            f"TELEPHONY_SIP_ACCOUNT_RELOAD agent={account.agent} state={state.value}",
+            flush=True,
+        )
+
+    def _disconnect_agent_calls(self, agent: str, engine) -> None:
+        with self._lock:
+            call_ids = [call_id for call_id, owner in self._call_agents.items() if owner == agent]
+            bridges = [
+                bridge for call_id in call_ids for bridge in self._media_bridges.get(call_id, ())
+            ]
+        for bridge in bridges:
+            try:
+                self.stop_media(bridge)
+            except BaseException:
+                pass
+        for call_id in call_ids:
+            try:
+                snapshot = self.calls.get(call_id)
+            except CallStateError:
+                continue
+            if snapshot.state in {TelephonyCallState.ENDED, TelephonyCallState.FAILED}:
+                continue
+            self.calls.transition(call_id, TelephonyCallState.DISCONNECTING, ignore_invalid=True)
+            try:
+                engine.hangup_call(call_id)
+            except BaseException:
+                self.calls.transition(
+                    call_id, TelephonyCallState.FAILED,
+                    failure_reason="sip_account_reloaded", ignore_invalid=True,
+                )
+
+    def _purge_agent_calls(self, agent: str) -> None:
+        timers: list[threading.Timer] = []
+        with self._lock:
+            call_ids = [call_id for call_id, owner in self._call_agents.items() if owner == agent]
+            for call_id in call_ids:
+                self._call_agents.pop(call_id, None)
+                self._call_metadata.pop(call_id, None)
+                self._connected_at.pop(call_id, None)
+                self._handset_leases.pop(call_id, None)
+                self._media_starting.discard(call_id)
+                timer = self._handset_disconnect_timers.pop(call_id, None)
+                if timer is not None:
+                    timers.append(timer)
+        for timer in timers:
+            timer.cancel()
+
+    def _remove_account(self, agent: str) -> None:
+        with self._lock:
+            self._reloading.add(agent)
+        try:
+            with self._account_operation_lock(agent):
+                with self._lock:
+                    engine = self.engines.get(agent)
+                if engine is not None:
+                    self._disconnect_agent_calls(agent, engine)
+                    try:
+                        engine.stop()
+                    except BaseException as exc:
+                        print(
+                            f"TELEPHONY_SIP_ACCOUNT_STOP_ERROR agent={agent} error={type(exc).__name__}",
+                            flush=True,
+                        )
+                self._purge_agent_calls(agent)
+                with self._lock:
+                    self.engines.pop(agent, None)
+                    old = self._by_agent.pop(agent, None)
+                    if old is not None:
+                        self._by_user.pop(old.user, None)
+                    self._recovering.discard(agent)
+        finally:
+            with self._lock:
+                self._reloading.discard(agent)
+
+    def _replace_account(self, account: TelephonyRuntimeAccount) -> None:
+        agent = account.agent
+        with self._lock:
+            self._reloading.add(agent)
+        try:
+            with self._account_operation_lock(agent):
+                with self._lock:
+                    old_engine = self.engines.get(agent)
+                    old_account = self._by_agent.get(agent)
+                if old_engine is not None:
+                    self._disconnect_agent_calls(agent, old_engine)
+                    try:
+                        old_engine.stop()
+                    except BaseException as exc:
+                        print(
+                            f"TELEPHONY_SIP_ACCOUNT_STOP_ERROR agent={agent} error={type(exc).__name__}",
+                            flush=True,
+                        )
+                engine = self._prepare_engine(account)
+                with self._lock:
+                    self.engines[agent] = engine
+                    self._by_agent[agent] = account
+                    if old_account is not None and old_account.user != account.user:
+                        self._by_user.pop(old_account.user, None)
+                    self._by_user[account.user] = account
+                    self._recovering.discard(agent)
+                self._register_reloaded_engine(account, engine)
+        finally:
+            with self._lock:
+                self._reloading.discard(agent)
+
+    def _add_account(self, account: TelephonyRuntimeAccount) -> None:
+        agent = account.agent
+        with self._lock:
+            self._reloading.add(agent)
+        try:
+            with self._account_operation_lock(agent):
+                engine = self._prepare_engine(account)
+                with self._lock:
+                    self.engines[agent] = engine
+                    self._by_agent[agent] = account
+                    self._by_user[account.user] = account
+                self._register_reloaded_engine(account, engine)
+        finally:
+            with self._lock:
+                self._reloading.discard(agent)
 
     def call_media_status(self, call_id: str, bridge: PcmMediaBridge | None = None) -> dict:
         engine = self.engine_for_call(call_id)
@@ -539,10 +731,17 @@ class TelephonySipRuntime:
 
     def _registration_monitor_loop(self) -> None:
         while not self._stop_event.wait(self._registration_monitor_interval):
-            for account in self.accounts:
+            with self._lock:
+                accounts = tuple(self.accounts)
+            for account in accounts:
                 if self._stop_event.is_set():
                     return
-                engine = self.engines[account.agent]
+                with self._lock:
+                    if account.agent in self._reloading:
+                        continue
+                    engine = self.engines.get(account.agent)
+                if engine is None:
+                    continue
                 try:
                     state = engine.registration_state
                 except BaseException:
@@ -559,23 +758,30 @@ class TelephonySipRuntime:
                 ).start()
 
     def _recover_account(self, account: TelephonyRuntimeAccount) -> None:
-        engine = self.engines[account.agent]
         try:
             attempt = 0
             while not self._stop_event.is_set():
-                try:
-                    engine.stop()
-                except BaseException:
-                    pass
-                if self._stop_event.is_set():
-                    return
-                try:
-                    engine.on_incoming_call(self._incoming_handler(account))
-                    engine.on_call_state(self._state_handler(account))
-                    engine.start()
-                    state = engine.register_account(account.config)
-                except BaseException:
-                    state = SipRegistrationState.FAILED
+                with self._account_operation_lock(account.agent):
+                    with self._lock:
+                        if account.agent in self._reloading:
+                            return
+                        engine = self.engines.get(account.agent)
+                        current = self._by_agent.get(account.agent)
+                    if engine is None or current != account:
+                        return
+                    try:
+                        engine.stop()
+                    except BaseException:
+                        pass
+                    if self._stop_event.is_set():
+                        return
+                    try:
+                        engine.on_incoming_call(self._incoming_handler(account))
+                        engine.on_call_state(self._state_handler(account))
+                        engine.start()
+                        state = engine.register_account(account.config)
+                    except BaseException:
+                        state = SipRegistrationState.FAILED
                 if state == SipRegistrationState.REGISTERED:
                     return
                 delay = self._registration_recovery_backoff[min(attempt, len(self._registration_recovery_backoff) - 1)]

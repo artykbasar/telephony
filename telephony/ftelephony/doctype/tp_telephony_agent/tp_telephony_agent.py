@@ -4,8 +4,16 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 
+from telephony.runtime.config_reload import schedule_runtime_config_reload
+
 
 class TPTelephonyAgent(Document):
+    def on_update(self):
+        schedule_runtime_config_reload()
+
+    def after_delete(self):
+        schedule_runtime_config_reload()
+
     def validate(self):
         if not self.sip_enabled:
             return
