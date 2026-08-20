@@ -38,7 +38,10 @@ from telephony.voice.sip.rfcvoip_dynamic_ports import (
     reserve_rtp_ports,
 )
 from telephony.voice.sip.rfcvoip_opus import install_bundled_opus_compatibility
-from telephony.voice.sip.rfcvoip_sdp import install_rfcvoip_sdp_advertised_ip_compatibility
+from telephony.voice.sip.rfcvoip_sdp import (
+    effective_advertised_ip,
+    install_rfcvoip_sdp_advertised_ip_compatibility,
+)
 from telephony.voice.sip.rfcvoip_timing import install_rfcvoip_timing_compatibility
 
 logger = logging.getLogger(__name__)
@@ -275,11 +278,25 @@ class RfcVoipEngine(SipEngine):
             advertised_ip = str(config.advertised_ip or "").strip()
             if advertised_ip:
                 phone.sip._telephony_advertised_ip = advertised_ip
+                phone.sip._telephony_advertised_ip_source = "configured"
             self._account = config
             self._phone = phone
 
         try:
             phone.start()
+            effective_ip, advertised_source = effective_advertised_ip(phone.sip, config.local_ip)
+            if not effective_ip:
+                raise SipEngineStateError(
+                    "SIP server did not report this client's observed address; "
+                    "configure Advertised Address instead of using a wildcard bind address."
+                )
+            phone.sip._telephony_advertised_ip = effective_ip
+            phone.sip._telephony_advertised_ip_source = advertised_source
+            print(
+                "TELEPHONY_SIP_MEDIA_ADDRESS "
+                f"username={config.username} address={effective_ip} source={advertised_source}",
+                flush=True,
+            )
         except BaseException:
             try:
                 phone.stop()
@@ -380,9 +397,12 @@ class RfcVoipEngine(SipEngine):
         if phone is None or account is None:
             return {}
         local_port = int(getattr(getattr(phone, "sip", None), "myPort", 0) or 0)
+        advertised_ip, advertised_source = effective_advertised_ip(phone.sip, account.local_ip)
         return {
             "local_ip": account.local_ip,
             "local_sip_port": local_port or None,
+            "advertised_ip": advertised_ip or None,
+            "advertised_ip_source": advertised_source,
             "server": account.server,
             "server_port": account.port,
             "transport": account.transport,

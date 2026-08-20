@@ -77,6 +77,7 @@ class _FakeCall:
 class _FakePhone:
     instances = []
     spawn_receive_thread = False
+    learn_observed_ip = True
 
     def __init__(self, **kwargs):
         self.kwargs = kwargs
@@ -91,6 +92,9 @@ class _FakePhone:
 
     def start(self):
         self.status = PhoneStatus.REGISTERED
+        if self.__class__.learn_observed_ip and not getattr(self.sip, "_telephony_advertised_ip", ""):
+            self.sip._telephony_advertised_ip = "198.51.100.77"
+            self.sip._telephony_advertised_ip_source = "register-received"
         if self.__class__.spawn_receive_thread:
             self._receive_thread = threading.Thread(
                 target=self._receive_stop.wait,
@@ -119,6 +123,7 @@ class RfcVoipEngineTest(unittest.TestCase):
     def setUp(self):
         _FakePhone.instances.clear()
         _FakePhone.spawn_receive_thread = False
+        _FakePhone.learn_observed_ip = True
         self.phone_patch = patch(
             "telephony.voice.sip.rfcvoip_engine._RfcVoipPhone",
             _FakePhone,
@@ -170,6 +175,23 @@ class RfcVoipEngineTest(unittest.TestCase):
 
         self.engine.unregister_account()
         self.assertEqual(self.engine.registration_state, SipRegistrationState.INACTIVE)
+
+    def test_wildcard_bind_fails_closed_when_advertised_ip_cannot_be_learned(self):
+        _FakePhone.learn_observed_ip = False
+        with self.assertRaisesRegex(SipEngineStateError, "Advertised Address"):
+            self.engine.register_account(self.config)
+        phone = _FakePhone.instances[-1]
+        self.assertEqual(phone.status, PhoneStatus.INACTIVE)
+        self.assertEqual(self.engine.registration_state, SipRegistrationState.INACTIVE)
+
+    def test_registration_uses_server_observed_ip_when_bind_is_wildcard(self):
+        phone = self.register()
+        self.assertEqual(phone.kwargs["myIP"], "0.0.0.0")
+        self.assertEqual(phone.sip._telephony_advertised_ip, "198.51.100.77")
+        self.assertEqual(phone.sip._telephony_advertised_ip_source, "register-received")
+        status = self.engine.signaling_status()
+        self.assertEqual(status["advertised_ip"], "198.51.100.77")
+        self.assertEqual(status["advertised_ip_source"], "register-received")
 
     def test_registration_applies_advertised_media_ip_without_changing_bind_ip(self):
         self.config = SipAccountConfig(
